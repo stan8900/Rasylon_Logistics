@@ -5,13 +5,25 @@ from typing import Dict, Iterable, List, Optional
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 GROUPS_PAGE_SIZE = 8
-MINI_APP_URL = os.getenv("MINI_APP_URL") or os.getenv("WEB_APP_URL")
+
+
+def mini_app_url() -> Optional[str]:
+    explicit_url = os.getenv("MINI_APP_URL") or os.getenv("WEB_APP_URL")
+    if explicit_url:
+        return explicit_url.rstrip("/")
+    base_url = os.getenv("PUBLIC_BASE_URL") or os.getenv("RAILWAY_PUBLIC_DOMAIN")
+    if not base_url:
+        return None
+    if not base_url.startswith(("http://", "https://")):
+        base_url = f"https://{base_url}"
+    return f"{base_url.rstrip('/')}/app"
 
 
 def mini_app_row() -> List[InlineKeyboardButton]:
-    if not MINI_APP_URL:
+    url = mini_app_url()
+    if not url:
         return []
-    return [InlineKeyboardButton("🌐 Mini App", web_app=WebAppInfo(url=MINI_APP_URL))]
+    return [InlineKeyboardButton("🌐 Mini App", web_app=WebAppInfo(url=url))]
 
 
 def main_menu_keyboard(is_admin: bool, *, allow_group_pick: bool) -> InlineKeyboardMarkup:
