@@ -3,6 +3,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
+from uuid import uuid4
 
 try:
     import psycopg
@@ -39,9 +40,37 @@ class AnalyticsStorage:
     def _execute(self, query: str, params: Sequence[Any] = ()) -> Any:
         return self._conn.execute(self._prepare_query(query), params)
 
+    def _commit(self) -> None:
+        if not self._is_postgres:
+            self._conn.commit()
+
     @staticmethod
     def _row_to_dict(row: Any) -> Dict[str, Any]:
         return dict(row)
+
+    async def create_payment_request(
+        self,
+        *,
+        user_id: int,
+        username: Optional[str],
+        full_name: str,
+        card_number: str,
+        card_name: str,
+    ) -> str:
+        async with self._lock:
+            request_id = uuid4().hex
+            created_at = datetime.utcnow().isoformat()
+            self._execute(
+                """
+                INSERT INTO payments (
+                    request_id, user_id, username, full_name,
+                    card_number, card_name, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (request_id, user_id, username, full_name, card_number, card_name, created_at),
+            )
+            self._commit()
+            return request_id
 
     async def get_all_payments(self) -> List[Dict[str, Any]]:
         async with self._lock:

@@ -1,9 +1,18 @@
 import math
+import os
 from typing import Dict, Iterable, List, Optional
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 GROUPS_PAGE_SIZE = 8
+MINI_APP_URL = os.getenv("MINI_APP_URL") or os.getenv("WEB_APP_URL")
+
+
+def mini_app_row() -> List[InlineKeyboardButton]:
+    if not MINI_APP_URL:
+        return []
+    return [InlineKeyboardButton("🌐 Mini App", web_app=WebAppInfo(url=MINI_APP_URL))]
+
 
 def main_menu_keyboard(is_admin: bool, *, allow_group_pick: bool) -> InlineKeyboardMarkup:
     if is_admin:
@@ -21,6 +30,7 @@ def main_menu_keyboard(is_admin: bool, *, allow_group_pick: bool) -> InlineKeybo
             [
                 InlineKeyboardButton("💰 Пополнить баланс", callback_data="main:pay"),
             ],
+            mini_app_row(),
             controls_row,
             [
                 InlineKeyboardButton("📥 Парсер", callback_data="main:parser"),
@@ -43,8 +53,10 @@ def main_menu_keyboard(is_admin: bool, *, allow_group_pick: bool) -> InlineKeybo
             [
                 InlineKeyboardButton("💰 Пополнить баланс", callback_data="main:pay"),
             ],
+            mini_app_row(),
             [InlineKeyboardButton("📜 История оплат", callback_data="main:user_payments")],
         ]
+    keyboard = [row for row in keyboard if row]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def my_account_keyboard(*, allow_account_pick: bool) -> InlineKeyboardMarkup:
