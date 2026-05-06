@@ -28,6 +28,8 @@ from app.keyboards import (
     auto_menu_keyboard,
     groups_keyboard,
     main_menu_keyboard,
+    mini_app_button,
+    mini_app_url,
     my_account_keyboard,
 )
 from app.pdf_reports import build_payments_pdf
@@ -170,6 +172,80 @@ async def answer_sleep_message_if_needed(message: types.Message) -> bool:
         return False
     await message.answer(build_sleep_message(sleep_until))
     return True
+
+
+def is_public_command(message: types.Message) -> bool:
+    text = (message.text or "").strip().lower()
+    if not text.startswith("/"):
+        return False
+    command = text.split(maxsplit=1)[0].split("@", maxsplit=1)[0]
+    return command in {"/start", "/cancel", "/admin", "/админ"}
+
+
+async def is_waiting_for_admin_code(message: types.Message) -> bool:
+    if not message.from_user:
+        return False
+    state = Dispatcher.get_current().current_state(
+        chat=message.chat.id,
+        user=message.from_user.id,
+    )
+    current_state = await state.get_state()
+    return bool(current_state and current_state.startswith(AdminLoginStates.__name__))
+
+
+def mini_app_keyboard() -> Optional[InlineKeyboardMarkup]:
+    button = mini_app_button("Перейти в Mini App")
+    if not button:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[button]])
+
+
+async def send_mini_app_gate(message: types.Message) -> None:
+    text = (
+        "Перейдите в наше мини приложение.\n\n"
+        "Функции бота будут доступны после заполнения всех полей, отправки заявки на оплату "
+        "и подтверждения оплаты администратором."
+    )
+    keyboard = mini_app_keyboard()
+    if keyboard:
+        await message.answer(text, reply_markup=keyboard)
+        return
+    url = mini_app_url()
+    if url:
+        await message.answer(f"{text}\n\n{url}")
+        return
+    await message.answer(
+        f"{text}\n\nMini App URL не настроен. Задайте MINI_APP_URL или PUBLIC_BASE_URL."
+    )
+
+
+async def user_has_bot_access(user_id: int) -> bool:
+    if await is_admin_user(user_id):
+        return True
+    return await storage.has_recent_payment_for_user(user_id, within_days=PAYMENT_VALID_DAYS)
+
+
+class PaidAccessMiddleware(BaseMiddleware):
+    async def on_pre_process_message(self, message: types.Message, data: Dict[str, Any]) -> None:
+        if message.chat.type != types.ChatType.PRIVATE or not message.from_user:
+            return
+        if is_public_command(message) or await is_waiting_for_admin_code(message):
+            return
+        if await user_has_bot_access(message.from_user.id):
+            return
+        await send_mini_app_gate(message)
+        raise CancelHandler()
+
+    async def on_pre_process_callback_query(self, call: types.CallbackQuery, data: Dict[str, Any]) -> None:
+        if not call.from_user:
+            return
+        if await user_has_bot_access(call.from_user.id):
+            return
+        await call.answer(
+            "Сначала заполните Mini App и дождитесь подтверждения оплаты.",
+            show_alert=True,
+        )
+        raise CancelHandler()
 
 
 class SleepModeMiddleware(BaseMiddleware):
@@ -326,6 +402,7 @@ if tg_user_proxy_raw:
 
 bot = Bot(token=BOT_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=MemoryStorage())
+dp.middleware.setup(PaidAccessMiddleware())
 dp.middleware.setup(SleepModeMiddleware())
 
 bot["storage"] = storage
@@ -1401,8 +1478,16 @@ async def load_available_chats(
     return known, None
 
 
-@dp.message_handler(commands=["start", "menu"], state="*")
+@dp.message_handler(commands=["start"], state="*")
 async def cmd_start(message: types.Message, state: FSMContext) -> None:
+    if await answer_sleep_message_if_needed(message):
+        return
+    await state.finish()
+    await send_mini_app_gate(message)
+
+
+@dp.message_handler(commands=["menu"], state="*")
+async def cmd_menu(message: types.Message, state: FSMContext) -> None:
     if await answer_sleep_message_if_needed(message):
         return
     await state.finish()

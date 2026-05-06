@@ -3,7 +3,7 @@ import hmac
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import parse_qsl
 
 from aiohttp import web
@@ -24,6 +24,7 @@ PAYMENT_CARD_TARGET = os.getenv("PAYMENT_CARD_TARGET", "9860 1701 1433 3116")
 BOT_USERNAME = (os.getenv("BOT_USERNAME") or os.getenv("TELEGRAM_BOT_USERNAME") or "").lstrip("@")
 SUPPORT_AGENT_USERNAME = os.getenv("SUPPORT_AGENT_USERNAME", "@rasylon_support")
 ADMIN_REDIRECT_URL = os.getenv("ADMIN_REDIRECT_URL", "https://rasylon-support-production.up.railway.app/")
+PaymentCreatedCallback = Callable[[int, str], Awaitable[None]]
 
 
 def money(amount: int) -> str:
@@ -160,6 +161,12 @@ async def payment_api(request: web.Request) -> web.Response:
         card_number=card_number,
         card_name=card_name,
     )
+    callback: Optional[PaymentCreatedCallback] = request.app.get("payment_created_callback")
+    if callback:
+        try:
+            await callback(user_id, request_id)
+        except Exception:
+            logger.exception("Failed to notify admins about Mini App payment request.")
     return web.json_response(
         {
             "ok": True,
@@ -173,9 +180,14 @@ async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
-def create_app(storage: Optional[Any] = None) -> web.Application:
+def create_app(
+    storage: Optional[Any] = None,
+    *,
+    payment_created_callback: Optional[PaymentCreatedCallback] = None,
+) -> web.Application:
     app = web.Application()
     app["storage"] = storage or create_storage_from_env()
+    app["payment_created_callback"] = payment_created_callback
     app.router.add_get("/health", health)
     app.router.add_get("/assets/telegram.lottie", telegram_lottie)
     app.router.add_get("/", index)

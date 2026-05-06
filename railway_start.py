@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 async def run_web(stop_event: asyncio.Event) -> web.AppRunner:
-    app = create_app(storage=bot_module.storage)
+    app = create_app(
+        storage=bot_module.storage,
+        payment_created_callback=bot_module.notify_admins_about_payment,
+    )
     runner = web.AppRunner(app)
     await runner.setup()
     host = os.getenv("APP_HOST", "0.0.0.0")

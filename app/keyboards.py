@@ -19,11 +19,18 @@ def mini_app_url() -> Optional[str]:
     return f"{base_url.rstrip('/')}/app"
 
 
-def mini_app_row() -> List[InlineKeyboardButton]:
+def mini_app_button(label: str = "🌐 Mini App") -> Optional[InlineKeyboardButton]:
     url = mini_app_url()
     if not url:
+        return None
+    return InlineKeyboardButton(label, web_app=WebAppInfo(url=url))
+
+
+def mini_app_row() -> List[InlineKeyboardButton]:
+    button = mini_app_button()
+    if not button:
         return []
-    return [InlineKeyboardButton("🌐 Mini App", web_app=WebAppInfo(url=url))]
+    return [button]
 
 
 def main_menu_keyboard(is_admin: bool, *, allow_group_pick: bool) -> InlineKeyboardMarkup:
