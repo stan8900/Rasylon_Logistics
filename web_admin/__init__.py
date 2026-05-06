@@ -1,1 +1,0 @@
-"""Standalone web admin package."""

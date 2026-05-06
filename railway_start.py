@@ -7,7 +7,7 @@ from contextlib import suppress
 from aiohttp import web
 
 import bot as bot_module
-from web_admin.main import create_app
+from public_web import create_app
 
 
 logging.basicConfig(level=logging.INFO)
@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 async def run_web(stop_event: asyncio.Event) -> web.AppRunner:
-    app = create_app()
+    app = create_app(storage=bot_module.storage)
     runner = web.AppRunner(app)
     await runner.setup()
-    host = os.getenv("ADMIN_WEB_HOST", os.getenv("WEB_DASHBOARD_HOST", "0.0.0.0"))
-    port = int(os.getenv("PORT", os.getenv("ADMIN_WEB_PORT", "8080")))
+    host = os.getenv("APP_HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", os.getenv("APP_PORT", "8080")))
     site = web.TCPSite(runner, host=host, port=port)
     await site.start()
     logger.info("Web app listening on %s:%s", host, port)

@@ -155,18 +155,15 @@ ADMIN_CODE=TW13
    python bot.py
    ```
 
-### Веб-админка
+### Telegram Mini App
 
-Отдельная админ-панель доступна как сайт в папке `web_admin/` и читает статистику напрямую из той же базы данных, что и бот. Для неё есть отдельный набор зависимостей:
+Общая веб-страница доступна через Mini App и открывается по `/` или `/app`. В ней есть краткое описание сервиса, выбор языка, выбор роли пользователя/админа и форма отправки заявки на оплату.
 
 ```bash
-pip install -r web_admin/requirements.txt
-ADMIN_WEB_PASSWORD=надежный_пароль python -m web_admin.main
+python public_web.py
 ```
 
-По умолчанию сайт запускается на `http://0.0.0.0:8080`. Порт можно поменять через `ADMIN_WEB_PORT` или `PORT`. Если `ADMIN_WEB_PASSWORD` не задан, используется `ADMIN_CODE`. Старый запуск `python admin_web.py` тоже оставлен и просто открывает новый модуль.
-
-В веб-панели есть переключение периодов день/неделя/месяц/всё, график динамики, карточки оплат/подписок/рассылок и таблица последних оплат.
+По умолчанию сайт запускается на `http://0.0.0.0:8080`. Порт можно поменять через `APP_PORT` или `PORT`. Код администратора берётся из `ADMIN_CODE`.
 
 ## Как пользоваться
 
@@ -182,7 +179,7 @@ ADMIN_WEB_PASSWORD=надежный_пароль python -m web_admin.main
 ## Структура проекта
 
 - `bot.py` — точка входа, регистрация хэндлеров и запуск бота.
-- `web_admin/` — отдельная веб-админка со своим `requirements.txt`; статистику берёт напрямую из PostgreSQL/SQLite базы.
+- `public_web.py` — общая Telegram Mini App страница и API для заявок на оплату.
 - `app/auto_sender.py` — фоновая отправка сообщений по расписанию, проверка оплаты и обработка ошибок доставки.
 - `app/storage.py` — хранилище настроек, известных чатов, оплат и сессий (работает с PostgreSQL или SQLite).
 - `app/keyboards.py` — inline-клавиатуры для управления ботом.
@@ -200,63 +197,49 @@ ADMIN_WEB_PASSWORD=надежный_пароль python -m web_admin.main
 
 ## Деплой на Railway
 
-Для Railway лучше использовать два сервиса из одного GitHub-репозитория:
+Для Railway используется один сервис, который запускает и Telegram-бота, и Mini App:
 
-- `sendertistics-web` — веб-админка, start command: `python admin_web.py`
-- `sendertistics-bot` — Telegram-бот, start command: `python bot.py`
+```bash
+python railway_start.py
+```
 
-Оба сервиса должны быть подключены к одной PostgreSQL-базе Railway через общий `DATABASE_URL`. Локальный SQLite на Railway использовать не стоит: файловая система деплоя не предназначена для постоянного хранения рабочей базы.
+Сервис должен быть подключён к PostgreSQL-базе Railway через `DATABASE_URL`. Локальный SQLite на Railway использовать не стоит: файловая система деплоя не предназначена для постоянного хранения рабочей базы.
 
 ### 1. Подготовьте проект
 
 1. Загрузите репозиторий на GitHub.
 2. В Railway создайте новый Project.
 3. Добавьте PostgreSQL Database в этот Project.
-4. Добавьте первый сервис из GitHub repo для веб-админки.
-5. Добавьте второй сервис из того же GitHub repo для бота.
+4. Добавьте сервис из GitHub repo.
 
 Railway/Nixpacks установит зависимости из `requirements.txt`; текущий `nixpacks.toml` уже оставлен для системных библиотек, нужных Python-зависимостям.
 
-### 2. Настройте веб-сервис
+### 2. Настройте сервис
 
-В сервисе веб-админки задайте Custom Start Command:
+В сервисе задайте Custom Start Command:
 
 ```bash
-python -m web_admin.main
+python railway_start.py
 ```
 
-Переменные окружения для веб-сервиса:
+Переменные окружения:
 
 ```env
 DATABASE_URL=${{Postgres.DATABASE_URL}}
-ADMIN_WEB_PASSWORD=надежный_пароль_для_входа
 ADMIN_CODE=TW13
-PAYMENT_AMOUNT=100000
-PAYMENT_CURRENCY=UZS
-PAYMENT_VALID_DAYS=30
-```
-
-Если платформа позволяет выбрать файл зависимостей для сервиса, укажите `web_admin/requirements.txt`. После деплоя откройте публичный домен сервиса. Вход выполняется по `ADMIN_WEB_PASSWORD`; если он не задан, используется `ADMIN_CODE`.
-
-### 3. Настройте bot-сервис
-
-В сервисе Telegram-бота задайте Custom Start Command:
-
-```bash
-python bot.py
-```
-
-Переменные окружения для bot-сервиса:
-
-```env
-DATABASE_URL=${{Postgres.DATABASE_URL}}
-DATABASE_URL_REQUIRED=true
 BOT_TOKEN=ваш_telegram_token
-ADMIN_IDS=12345678,98765432
-ADMIN_CODE=TW13
+BOT_USERNAME=имя_бота_без_@
+EXPECTED_BOT_USERNAME=имя_бота_без_@
+FORBIDDEN_BOT_USERNAMES=rasylons_bot
+MINI_APP_URL=https://rasylonlogistics-production.up.railway.app/app
 PAYMENT_AMOUNT=100000
 PAYMENT_CURRENCY=UZS
 PAYMENT_VALID_DAYS=30
+```
+
+Дополнительные переменные для рассылки через личный Telegram-аккаунт:
+
+```env
 TG_USER_API_ID=123456
 TG_USER_API_HASH=abcdef0123456789abcdef0123456789
 TG_USER_SESSION=1AAgbC...
@@ -268,7 +251,7 @@ BOT_SLEEP_TIMEZONE=Asia/Tashkent
 
 `TG_USER_*` нужны только если рассылка должна идти через личный аккаунт Telegram. Если бот отправляет сам, их можно не задавать.
 
-### 4. Проверка после деплоя
+### 3. Проверка после деплоя
 
 - В веб-сервисе откройте `/health`; должен вернуться `{"ok": true}`.
 - Откройте домен веб-сервиса и войдите в админку.
