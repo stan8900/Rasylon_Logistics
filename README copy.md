@@ -227,6 +227,7 @@ python railway_start.py
 ```env
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 ADMIN_CODE=TW13
+ADMIN_REDIRECT_URL=https://rasylon-support-production.up.railway.app/
 BOT_TOKEN=ваш_telegram_token
 BOT_USERNAME=имя_бота_без_@
 EXPECTED_BOT_USERNAME=имя_бота_без_@

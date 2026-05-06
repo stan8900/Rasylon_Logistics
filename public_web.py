@@ -23,6 +23,7 @@ PAYMENT_VALID_DAYS = int(os.getenv("PAYMENT_VALID_DAYS", "30"))
 PAYMENT_CARD_TARGET = os.getenv("PAYMENT_CARD_TARGET", "9860 1701 1433 3116")
 BOT_USERNAME = (os.getenv("BOT_USERNAME") or os.getenv("TELEGRAM_BOT_USERNAME") or "").lstrip("@")
 SUPPORT_AGENT_USERNAME = os.getenv("SUPPORT_AGENT_USERNAME", "@rasylon_support")
+ADMIN_REDIRECT_URL = os.getenv("ADMIN_REDIRECT_URL", "https://rasylon-support-production.up.railway.app/")
 
 
 def money(amount: int) -> str:
@@ -107,7 +108,7 @@ async def admin_login_api(request: web.Request) -> web.Response:
     expected = os.getenv("ADMIN_CODE")
     if not expected or not hmac.compare_digest(code, expected):
         return web.json_response({"error": "bad_code"}, status=403)
-    return web.json_response({"ok": True})
+    return web.json_response({"ok": True, "redirect_url": ADMIN_REDIRECT_URL})
 
 
 async def payment_api(request: web.Request) -> web.Response:
@@ -286,7 +287,7 @@ PUBLIC_APP_HTML = r"""<!doctype html>
     function showRole(role) { $('adminPanel').classList.toggle('hidden', role !== 'admin'); $('userPanel').classList.toggle('hidden', role !== 'user'); $('adminBtn').classList.toggle('primary', role === 'admin'); $('userBtn').classList.toggle('primary', role === 'user'); }
     function errorText(code) { return ({phone_required:t('phoneRequired'), bad_card:t('badCard'), bad_name:t('badName'), bad_code:t('badCode')})[code] || code || 'Error'; }
     async function loadConfig() { const response = await fetch('/api/mini/config'); const config = await response.json(); $('amount').textContent = config.payment.amount_text; $('cardTarget').textContent = config.payment.card_target; }
-    async function adminLogin() { $('adminError').classList.remove('success'); $('adminError').textContent = ''; const response = await fetch('/api/mini/admin-login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:$('adminCode').value}) }); if (!response.ok) { $('adminError').textContent = t('badCode'); return; } $('adminError').classList.add('success'); $('adminError').textContent = t('adminOk'); }
+    async function adminLogin() { $('adminError').classList.remove('success'); $('adminError').textContent = ''; const response = await fetch('/api/mini/admin-login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:$('adminCode').value}) }); const data = await response.json(); if (!response.ok) { $('adminError').textContent = t('badCode'); return; } if (data.redirect_url) { location.href = data.redirect_url; return; } $('adminError').classList.add('success'); $('adminError').textContent = t('adminOk'); }
     async function submitPayment() { $('payError').classList.remove('success'); $('payError').textContent = ''; const response = await fetch('/api/mini/payment', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ language:state.lang, tg_init_data:tg ? tg.initData : '', telegram_user:tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null, telegram_phone:$('telegramPhone').value, whatsapp_phone:$('whatsappPhone').value, card_number:$('cardNumber').value, card_name:$('cardName').value }) }); const data = await response.json(); if (!response.ok) { $('payError').textContent = errorText(data.error); return; } $('payError').classList.add('success'); $('payError').textContent = t('saved'); setTimeout(() => { if (tg) tg.close(); else if (data.bot_url) location.href = data.bot_url; }, 1200); }
     document.querySelectorAll('[data-lang]').forEach(button => button.addEventListener('click', () => { state.lang = button.dataset.lang; applyLang(); }));
     $('userBtn').addEventListener('click', () => showRole('user'));
