@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -18,6 +19,7 @@ AUTO_WORK_END_HOUR = 20
 AUTO_DAILY_MESSAGE_LIMIT = 50
 AUTO_CHAT_MIN_INTERVAL_SECONDS = 10 * 60
 AUTO_SEND_PACE_SECONDS = 10 * 60
+AUTO_CHAT_REFRESH_COOLDOWN_SECONDS = 10 * 60
 
 
 class AutoSender:
@@ -36,6 +38,8 @@ class AutoSender:
         self._user_sender = user_sender
         self._account_manager = account_manager
         self._personal_chats: Dict[int, str] = {}
+        self._personal_chats_last_refresh_at = 0.0
+        self._personal_chats_refresh_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
         self._tasks: Dict[int, asyncio.Task[None]] = {}
         self._stop_events: Dict[int, asyncio.Event] = {}
@@ -260,24 +264,29 @@ class AutoSender:
         if not self._user_sender:
             self._personal_chats = {}
             return
-        try:
-            dialogs = await self._user_sender.list_accessible_chats()
-        except InvalidUserSessionError as exc:
-            self._logger.error("Общая пользовательская сессия Telegram недоступна: %s", exc)
-            await self._disable_shared_user_sender()
-            return
-        except Exception:
-            self._logger.exception("Не удалось получить список групп личного аккаунта.")
-            return
-        personal = {chat_id: title for chat_id, title in dialogs}
-        existing = await self._storage.list_known_chats()
-        existing_ids = {int(chat_id) for chat_id in existing.keys()}
-        current_ids = set(personal.keys())
-        for chat_id, title in personal.items():
-            await self._storage.upsert_known_chat(chat_id, title)
-        for stale_id in existing_ids - current_ids:
-            await self._storage.remove_known_chat(stale_id)
-        self._personal_chats = personal
+        async with self._personal_chats_refresh_lock:
+            now = time.monotonic()
+            if now - self._personal_chats_last_refresh_at < AUTO_CHAT_REFRESH_COOLDOWN_SECONDS:
+                return
+            self._personal_chats_last_refresh_at = now
+            try:
+                dialogs = await self._user_sender.list_accessible_chats()
+            except InvalidUserSessionError as exc:
+                self._logger.error("Общая пользовательская сессия Telegram недоступна: %s", exc)
+                await self._disable_shared_user_sender()
+                return
+            except Exception:
+                self._logger.exception("Не удалось получить список групп личного аккаунта.")
+                return
+            personal = {chat_id: title for chat_id, title in dialogs}
+            existing = await self._storage.list_known_chats()
+            existing_ids = {int(chat_id) for chat_id in existing.keys()}
+            current_ids = set(personal.keys())
+            for chat_id, title in personal.items():
+                await self._storage.upsert_known_chat(chat_id, title)
+            for stale_id in existing_ids - current_ids:
+                await self._storage.remove_known_chat(stale_id)
+            self._personal_chats = personal
 
     async def _resolve_targets(self, auto: dict) -> List[int]:
         account_id = auto.get("sender_account_id")
