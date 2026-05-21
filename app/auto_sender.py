@@ -16,8 +16,8 @@ TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
 AUTO_WORK_START_HOUR = 8
 AUTO_WORK_END_HOUR = 20
 AUTO_DAILY_MESSAGE_LIMIT = 50
-AUTO_CHAT_MIN_INTERVAL_SECONDS = 60
-AUTO_SEND_PACE_SECONDS = 60
+AUTO_CHAT_MIN_INTERVAL_SECONDS = 10 * 60
+AUTO_SEND_PACE_SECONDS = 10 * 60
 
 
 class AutoSender:
@@ -196,7 +196,7 @@ class AutoSender:
                                 )
                                 break
                             if reason == "chat_rate_limit":
-                                errors.append(f"Чат {chat_id}: лимит 1 сообщение в минуту.")
+                                errors.append(f"Чат {chat_id}: лимит 1 сообщение в 10 минут.")
                                 continue
                         await self._deliver_message(user_id, chat_id, message, account_id)
                         success += 1
