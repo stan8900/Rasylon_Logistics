@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, time as datetime_time
+from datetime import date, datetime, timedelta, time as datetime_time
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set
@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from app.account_manager import AccountManager, get_account_proxy
 from app.audience_parser import AudienceParser
 from app.auto_sender import AutoSender
+from app.daily_reports import build_daily_report_text, collect_report_user_ids
 from app.invite_engine import InviteEngine
 from app.keyboards import (
     GROUPS_PAGE_SIZE,
@@ -74,6 +75,8 @@ BOT_SLEEP_MESSAGE_TEMPLATE = os.getenv(
     "BOT_SLEEP_MESSAGE",
     "Бот находится в режиме спячки до {until}. Напишите позже.",
 )
+DAILY_REPORT_TEST_USER_ID = int(os.getenv("DAILY_REPORT_TEST_USER_ID", "1535189323"))
+REPORT_LOOP_INTERVAL_SECONDS = int(os.getenv("REPORT_LOOP_INTERVAL_SECONDS", "60"))
 
 
 def get_sleep_timezone() -> ZoneInfo:
@@ -151,6 +154,19 @@ def get_active_sleep_until(now: Optional[datetime] = None) -> Optional[datetime]
     if now_time < sleep_to:
         return datetime.combine(now.date(), sleep_to, tzinfo=timezone)
     return None
+
+
+def report_date_for_sleep_start(now: Optional[datetime] = None) -> date:
+    timezone = get_sleep_timezone()
+    now = now or datetime.now(timezone)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone)
+    else:
+        now = now.astimezone(timezone)
+    sleep_from = parse_sleep_time(BOT_SLEEP_FROM_RAW)
+    if sleep_from and sleep_from.hour == 0 and sleep_from.minute == 0:
+        return (now - timedelta(days=1)).date()
+    return now.date()
 
 
 def build_sleep_message(sleep_until: datetime) -> str:
@@ -428,6 +444,7 @@ if bot["account_manager"]:
     bot["invite_engine"] = InviteEngine(storage, bot["account_manager"])
 else:
     bot["invite_engine"] = None
+bot["daily_report_task"] = None
 
 PAYMENT_AMOUNT = int(os.getenv("PAYMENT_AMOUNT", "100000"))
 PAYMENT_CURRENCY = os.getenv("PAYMENT_CURRENCY", "UZS")
@@ -919,6 +936,79 @@ async def build_admin_stats_text(period: str = "day") -> str:
         f"Активно сейчас: {active_campaigns}",
     ]
     return "\n".join(lines)
+
+
+async def send_daily_report_to_user(bot_obj: Bot, user_id: int, report_date: date) -> bool:
+    report_text = await build_daily_report_text(storage, user_id, report_date, get_sleep_timezone())
+    try:
+        await bot_obj.send_message(user_id, report_text)
+        return True
+    except exceptions.TelegramAPIError as exc:
+        logger.warning("Не удалось отправить ежедневный отчёт пользователю %s: %s", user_id, exc)
+        return False
+
+
+async def send_daily_reports_to_all_users(
+    bot_obj: Bot,
+    report_date: date,
+    *,
+    first_user_id: Optional[int] = None,
+) -> tuple[int, int]:
+    data = await storage.get_data()
+    user_ids = collect_report_user_ids(data)
+    if first_user_id and first_user_id not in user_ids:
+        user_ids.insert(0, first_user_id)
+    elif first_user_id:
+        user_ids = [first_user_id] + [user_id for user_id in user_ids if user_id != first_user_id]
+
+    sent = 0
+    failed = 0
+    for user_id in user_ids:
+        if await send_daily_report_to_user(bot_obj, user_id, report_date):
+            sent += 1
+        else:
+            failed += 1
+        await asyncio.sleep(0.05)
+    return sent, failed
+
+
+async def send_startup_test_report(bot_obj: Bot) -> None:
+    report_date = report_date_for_sleep_start()
+    key = f"startup_test_daily_report_sent:{DAILY_REPORT_TEST_USER_ID}:{report_date.isoformat()}"
+    if await storage.get_system_setting(key):
+        return
+    if await send_daily_report_to_user(bot_obj, DAILY_REPORT_TEST_USER_ID, report_date):
+        await storage.set_system_setting(key, datetime.utcnow().isoformat())
+
+
+async def daily_report_lockdown_loop(bot_obj: Bot) -> None:
+    while True:
+        try:
+            sleep_until = get_active_sleep_until()
+            if sleep_until:
+                report_date = report_date_for_sleep_start()
+                key = f"daily_reports_sent:{report_date.isoformat()}"
+                if not await storage.get_system_setting(key):
+                    sent, failed = await send_daily_reports_to_all_users(
+                        bot_obj,
+                        report_date,
+                        first_user_id=DAILY_REPORT_TEST_USER_ID,
+                    )
+                    await storage.set_system_setting(
+                        key,
+                        f"{datetime.utcnow().isoformat()} sent={sent} failed={failed}",
+                    )
+                    logger.info(
+                        "Ежедневные отчёты за %s отправлены: %s успешно, %s ошибок.",
+                        report_date.isoformat(),
+                        sent,
+                        failed,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Ошибка в цикле ежедневных отчётов.")
+        await asyncio.sleep(max(5, REPORT_LOOP_INTERVAL_SECONDS))
 
 
 async def build_main_menu(user_id: int) -> tuple[str, InlineKeyboardMarkup, bool]:
@@ -2648,6 +2738,25 @@ async def cb_main_payments_pdf(call: types.CallbackQuery) -> None:
             pass
 
 
+@dp.callback_query_handler(lambda c: c.data == "main:send_reports")
+async def cb_main_send_reports(call: types.CallbackQuery) -> None:
+    if not await is_admin_user(call.from_user.id):
+        await call.answer("Доступно только администраторам.", show_alert=True)
+        return
+    await call.answer("Отправляю отчёты...")
+    report_date = report_date_for_sleep_start()
+    sent, failed = await send_daily_reports_to_all_users(
+        call.bot,
+        report_date,
+        first_user_id=DAILY_REPORT_TEST_USER_ID,
+    )
+    await call.message.answer(
+        f"Ежедневные отчёты за {report_date.strftime('%d.%m.%Y')} отправлены.\n"
+        f"Успешно: {sent}\n"
+        f"Ошибок: {failed}"
+    )
+
+
 @dp.callback_query_handler(lambda c: c.data == "auto:start")
 async def cb_auto_start(call: types.CallbackQuery) -> None:
     await call.answer()
@@ -2827,10 +2936,22 @@ async def on_startup(dispatcher: Dispatcher) -> None:
         require_targets=dispatcher.bot.get("user_sender") is None,
     )
     await auto_sender.start_if_enabled()
+    await send_startup_test_report(dispatcher.bot)
+    dispatcher.bot["daily_report_task"] = asyncio.create_task(
+        daily_report_lockdown_loop(dispatcher.bot),
+        name="daily-report-lockdown-loop",
+    )
     logger.info("Бот %s (%s) запущен", me.first_name, me.id)
 
 
 async def on_shutdown(dispatcher: Dispatcher) -> None:
+    daily_report_task: Optional[asyncio.Task[None]] = dispatcher.bot.get("daily_report_task")
+    if daily_report_task:
+        daily_report_task.cancel()
+        try:
+            await daily_report_task
+        except asyncio.CancelledError:
+            pass
     auto_sender: Optional[AutoSender] = dispatcher.bot.get("auto_sender")
     if auto_sender:
         await auto_sender.stop_all()

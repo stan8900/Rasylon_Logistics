@@ -62,6 +62,7 @@ def main_menu_keyboard(is_admin: bool, *, allow_group_pick: bool) -> InlineKeybo
                 InlineKeyboardButton("🔁 Перепроверить оплату", callback_data="main:manual_payment"),
             ],
             [InlineKeyboardButton("📄 PDF оплат", callback_data="main:payments_pdf")],
+            [InlineKeyboardButton("📬 Отчёты всем", callback_data="main:send_reports")],
         ]
     else:
         keyboard = [
