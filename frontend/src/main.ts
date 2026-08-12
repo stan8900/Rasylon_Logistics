@@ -22,6 +22,7 @@ type TelegramWebApp = {
 declare global {
   interface Window {
     Telegram?: { WebApp?: TelegramWebApp };
+    ymaps3?: any;
   }
 }
 
@@ -62,6 +63,20 @@ type MiniConfig = {
     url: string | null;
     support: string;
   };
+  maps?: {
+    yandex_api_key?: string | null;
+  };
+};
+
+type MessageClassification = {
+  intent: string;
+  current_location: string | null;
+  destination: string | null;
+  vehicle_type: string | null;
+  availability: string | null;
+  confidence: number;
+  source: string;
+  should_map: boolean;
 };
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "https://rasylonlogistics-production.up.railway.app").replace(/\/$/, "");
@@ -77,6 +92,7 @@ let activeScreen = "card";
 let isAuthenticated = false;
 let browserLoginToken: string | null = null;
 let browserLoginPoll: number | null = null;
+let currentTelegramUser: TelegramUser | null = tg?.initDataUnsafe?.user || null;
 let selectedLocationId = "tashkent";
 let radiusKm = 120;
 let query = "";
@@ -203,9 +219,7 @@ app.innerHTML = `
       </section>
 
       <section class="live-map" aria-label="Карта активности водителей">
-        <div class="map-grid"></div>
-        <div class="map-road road-main"></div>
-        <div class="map-road road-alt"></div>
+        <div id="realMap" class="real-map"></div>
         <div class="map-toolbar">
           <label>
             <span>Локация</span>
@@ -256,13 +270,23 @@ app.innerHTML = `
 
     <section class="screen" data-screen="messages">
       <section class="editorial-strip">
-        <span>Source</span>
-        <strong>Telegram messages become map signals.</strong>
+        <span>Auto mailing</span>
+        <strong>Сообщение сортируется AI по локации и запускается в выбранные Telegram-группы.</strong>
       </section>
       <div class="section-head">
-        <h1>Telegram сигналы</h1>
-        <button id="simulateMessage">+ сигнал</button>
+        <h1>Запуск рассылки</h1>
+        <button id="classifyMessage">AI сортировка</button>
       </div>
+      <form class="panel mailing-panel" id="mailingForm">
+        <label>Текст рассылки<textarea id="mailingMessage" placeholder="Например: Ташкент, тент, ищу груз на Алматы, готов сегодня"></textarea></label>
+        <div class="otp-grid">
+          <label>Интервал, минут<input id="mailingInterval" inputmode="numeric" value="10" /></label>
+          <button class="secondary-button" type="button" id="classifyMessageInline">Проверить AI</button>
+        </div>
+        <div class="ai-result" id="aiResult">AI ожидает текст сообщения.</div>
+        <button class="primary-button wide" type="submit">Запустить авторассылку</button>
+        <div class="status" id="mailingStatus"></div>
+      </form>
       <div class="parser-flow">
         <span>Telegram</span><span>Parser</span><span>AI</span><span>Geo</span><span>Dashboard</span>
       </div>
@@ -390,7 +414,7 @@ function byId<T extends HTMLElement>(id: string): T {
 function basePayload(): Record<string, unknown> {
   return {
     tg_init_data: tg?.initData || "",
-    telegram_user: tg?.initDataUnsafe?.user || null,
+    telegram_user: currentTelegramUser,
   };
 }
 
@@ -526,6 +550,45 @@ async function loadConfig(): Promise<void> {
   config = await response.json() as MiniConfig;
   byId("amountText").textContent = config.payment.amount_text;
   byId("cardText").textContent = config.payment.card_target;
+  await initRealMap();
+}
+
+function loadScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) {
+      resolve();
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("script_load_failed"));
+    document.head.appendChild(script);
+  });
+}
+
+async function initRealMap(): Promise<void> {
+  const container = byId<HTMLDivElement>("realMap");
+  const selected = selectedLocation();
+  const apiKey = import.meta.env.VITE_YANDEX_MAPS_API_KEY || "";
+  if (apiKey) {
+    try {
+      await loadScript(`https://api-maps.yandex.ru/v3/?apikey=${encodeURIComponent(apiKey)}&lang=ru_RU`);
+      await window.ymaps3.ready;
+      const { YMap, YMapDefaultSchemeLayer } = window.ymaps3;
+      container.innerHTML = "";
+      const map = new YMap(container, {
+        location: { center: [selected.lon, selected.lat], zoom: 6 },
+      });
+      map.addChild(new YMapDefaultSchemeLayer());
+      return;
+    } catch {
+      container.innerHTML = "";
+    }
+  }
+  const bbox = "65.5,38.2,78.8,44.6";
+  container.innerHTML = `<iframe title="OpenStreetMap" src="https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${selected.lat},${selected.lon}" loading="lazy"></iframe>`;
 }
 
 async function loadSignals(): Promise<void> {
@@ -559,6 +622,48 @@ async function submitPayment(event: SubmitEvent): Promise<void> {
     tg?.HapticFeedback?.notificationOccurred("error");
     const code = error instanceof Error ? error.message : "";
     setStatus(status, code === "phone_required" ? "Укажите Telegram номер." : code === "bad_card" ? "Проверьте карту." : "Не удалось отправить оплату.");
+  }
+}
+
+function renderClassification(classification: MessageClassification): void {
+  byId("aiResult").innerHTML = `
+    <strong>${classification.intent}</strong>
+    <span>Локация: ${classification.current_location || "не определена"}</span>
+    <span>Направление: ${classification.destination || "не определено"}</span>
+    <span>Транспорт: ${classification.vehicle_type || "не указан"}</span>
+    <span>Confidence: ${Math.round(classification.confidence * 100)}%</span>
+  `;
+}
+
+async function classifyMailingMessage(): Promise<MessageClassification | null> {
+  const message = byId<HTMLTextAreaElement>("mailingMessage").value.trim();
+  if (!message) {
+    byId("aiResult").textContent = "Введите текст сообщения для AI-сортировки.";
+    return null;
+  }
+  const data = await postJson<{ classification: MessageClassification }>("/api/ai/classify-message", { message });
+  renderClassification(data.classification);
+  return data.classification;
+}
+
+async function startMailing(event: SubmitEvent): Promise<void> {
+  event.preventDefault();
+  const status = byId<HTMLDivElement>("mailingStatus");
+  setStatus(status, "");
+  try {
+    const classification = await classifyMailingMessage();
+    const message = byId<HTMLTextAreaElement>("mailingMessage").value.trim();
+    const interval = Number(byId<HTMLInputElement>("mailingInterval").value || "10");
+    await postJson("/api/mini/mailing/start", {
+      ...basePayload(),
+      message,
+      interval_minutes: interval,
+      classification,
+    });
+    setStatus(status, "Авторассылка запущена. Бот будет отправлять сообщение по расписанию.", true);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    setStatus(status, code === "auth_required" ? "Сначала войдите через Telegram." : "Не удалось запустить рассылку.");
   }
 }
 
@@ -607,6 +712,7 @@ async function checkBrowserLogin(): Promise<void> {
       isAuthenticated = true;
       const userInfo = data.telegram_user;
       if (userInfo) {
+        currentTelegramUser = userInfo;
         const name = [userInfo.first_name, userInfo.last_name].filter(Boolean).join(" ") || userInfo.username || "Telegram user";
         byId("profileName").textContent = name;
         byId("profileMeta").textContent = userInfo.username ? `@${userInfo.username}` : `ID ${userInfo.id}`;
@@ -644,34 +750,11 @@ async function verifyOtp(event: SubmitEvent): Promise<void> {
   }
 }
 
-function simulateSignal(): void {
-  const newActivity: DriverActivity = {
-    id: `a${Date.now()}`,
-    driver: "Driver",
-    username: "@new_driver",
-    location: "Ташкент",
-    destination: "Алматы",
-    vehicle_type: "тент",
-    availability: "сейчас",
-    confidence: 0.87,
-    source: "gruz_uz",
-    minutes_ago: 0,
-    message: "Ташкент стою, тент, ищу груз на Алматы",
-  };
-  activities = [newActivity, ...activities];
-  const tashkent = locations.find((location) => location.id === "tashkent");
-  if (tashkent) {
-    tashkent.drivers += 1;
-    tashkent.messages += 1;
-    tashkent.updated_at = "только что";
-  }
-  renderAll();
-}
-
 function renderAll(): void {
   renderMap();
   renderActivities();
   renderLocations();
+  void initRealMap();
 }
 
 document.addEventListener("click", (event) => {
@@ -722,7 +805,9 @@ byId<HTMLButtonElement>("clearLocations").addEventListener("click", () => {
   renderLocations();
 });
 byId<HTMLButtonElement>("refreshSignals").addEventListener("click", () => void loadSignals());
-byId<HTMLButtonElement>("simulateMessage").addEventListener("click", simulateSignal);
+byId<HTMLButtonElement>("classifyMessage").addEventListener("click", () => void classifyMailingMessage());
+byId<HTMLButtonElement>("classifyMessageInline").addEventListener("click", () => void classifyMailingMessage());
+byId<HTMLFormElement>("mailingForm").addEventListener("submit", (event) => void startMailing(event as SubmitEvent));
 byId<HTMLButtonElement>("openBotLogin").addEventListener("click", () => void startBrowserLogin());
 byId<HTMLButtonElement>("sendOtp").addEventListener("click", () => void sendOtp());
 byId<HTMLFormElement>("otpForm").addEventListener("submit", (event) => void verifyOtp(event as SubmitEvent));

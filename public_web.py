@@ -3,6 +3,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -29,12 +30,30 @@ ADMIN_REDIRECT_URL = os.getenv("ADMIN_REDIRECT_URL", "https://rasylon-support-pr
 PaymentCreatedCallback = Callable[[int, str], Awaitable[None]]
 OrderCreatedCallback = Callable[[Dict[str, Any]], Awaitable[None]]
 OtpSenderCallback = Callable[[str, str, Optional[int]], Awaitable[None]]
+MailingStartCallback = Callable[[int, str, int, Optional[Dict[str, Any]]], Awaitable[Dict[str, Any]]]
 OTP_TTL_SECONDS = int(os.getenv("OTP_TTL_SECONDS", "300"))
 OTP_RESEND_SECONDS = int(os.getenv("OTP_RESEND_SECONDS", "60"))
 OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
 OTP_STORE: Dict[str, Dict[str, Any]] = {}
 BROWSER_LOGIN_TTL_SECONDS = int(os.getenv("BROWSER_LOGIN_TTL_SECONDS", "300"))
 BROWSER_LOGIN_STORE: Dict[str, Dict[str, Any]] = {}
+KNOWN_LOCATION_ALIASES = {
+    "таш": "Ташкент",
+    "tash": "Ташкент",
+    "tashkent": "Ташкент",
+    "toshkent": "Ташкент",
+    "ташкент": "Ташкент",
+    "самарканд": "Самарканд",
+    "samarqand": "Самарканд",
+    "samarkand": "Самарканд",
+    "алматы": "Алматы",
+    "almata": "Алматы",
+    "almaty": "Алматы",
+    "бишкек": "Бишкек",
+    "bishkek": "Бишкек",
+    "москва": "Москва",
+    "moscow": "Москва",
+}
 
 
 @web.middleware
@@ -103,6 +122,60 @@ def confirm_browser_login(token: str, telegram_user: Dict[str, Any]) -> bool:
     record["confirmed_user"] = telegram_user
     record["confirmed_at"] = now_utc()
     return True
+
+
+def normalize_location_text(value: str) -> Optional[str]:
+    clean = re.sub(r"[^a-zA-Zа-яА-ЯёЁ0-9]+", " ", value).strip().lower()
+    if not clean:
+        return None
+    words = clean.split()
+    for word in words:
+        if word in KNOWN_LOCATION_ALIASES:
+            return KNOWN_LOCATION_ALIASES[word]
+    for alias, normalized in KNOWN_LOCATION_ALIASES.items():
+        if alias in clean:
+            return normalized
+    return None
+
+
+def classify_message_locally(message: str) -> Dict[str, Any]:
+    text = message.strip()
+    lower = text.lower()
+    current_location = normalize_location_text(text)
+    destination = None
+    direction_match = re.search(r"(?:на|в|до|->|→)\s+([A-Za-zА-Яа-яЁё]+)", text, flags=re.IGNORECASE)
+    if direction_match:
+        destination = normalize_location_text(direction_match.group(1)) or direction_match.group(1).title()
+    vehicle_type = None
+    for candidate in ("тент", "рефрижератор", "реф", "фура", "изотерм", "самосвал", "газель", "лабо"):
+        if candidate in lower:
+            vehicle_type = "рефрижератор" if candidate == "реф" else candidate
+            break
+    availability = None
+    for candidate in ("сегодня", "завтра", "сейчас", "утром", "вечером"):
+        if candidate in lower:
+            availability = candidate
+            break
+    intent = "driver_searching_cargo" if any(word in lower for word in ("ищу", "свобод", "стою", "загрузка", "груз")) else "unknown"
+    confidence = 0.9
+    if not current_location:
+        confidence -= 0.35
+    if intent == "unknown":
+        confidence -= 0.25
+    if not vehicle_type:
+        confidence -= 0.1
+    confidence = max(0.1, min(0.98, confidence))
+    return {
+        "intent": intent,
+        "current_location": current_location,
+        "destination": destination,
+        "vehicle_type": vehicle_type,
+        "availability": availability,
+        "contact": None,
+        "confidence": confidence,
+        "source": "local_ai",
+        "should_map": bool(current_location and confidence >= 0.7),
+    }
 
 
 def public_locations_payload() -> Dict[str, Any]:
@@ -260,6 +333,49 @@ async def config_api(request: web.Request) -> web.Response:
 
 async def locations_api(request: web.Request) -> web.Response:
     return web.json_response(public_locations_payload())
+
+
+async def classify_message_api(request: web.Request) -> web.Response:
+    data = await request.json()
+    message = str(data.get("message") or "").strip()
+    if len(message) < 3:
+        return web.json_response({"error": "message_required"}, status=400)
+    return web.json_response({"ok": True, "classification": classify_message_locally(message)})
+
+
+async def mailing_start_api(request: web.Request) -> web.Response:
+    data = await request.json()
+    telegram_user = verify_telegram_init_data(str(data.get("tg_init_data") or ""))
+    if telegram_user is None and isinstance(data.get("telegram_user"), dict):
+        telegram_user = data["telegram_user"]
+    user_id = None
+    if telegram_user:
+        try:
+            user_id = int(telegram_user.get("id"))
+        except (TypeError, ValueError):
+            user_id = None
+    if user_id is None:
+        return web.json_response({"error": "auth_required"}, status=401)
+
+    message = str(data.get("message") or "").strip()
+    if len(message) < 3:
+        return web.json_response({"error": "message_required"}, status=400)
+    try:
+        interval_minutes = int(data.get("interval_minutes") or 10)
+    except (TypeError, ValueError):
+        interval_minutes = 10
+    interval_minutes = max(1, min(1440, interval_minutes))
+    classification = classify_message_locally(message)
+
+    callback: Optional[MailingStartCallback] = request.app.get("mailing_start_callback")
+    if callback:
+        result = await callback(user_id, message, interval_minutes, classification)
+    else:
+        await request.app["storage"].set_auto_message(user_id, message)
+        await request.app["storage"].set_auto_interval(user_id, interval_minutes)
+        await request.app["storage"].set_auto_enabled(user_id, True)
+        result = {"ok": True, "started": True}
+    return web.json_response({"ok": True, "classification": classification, **result})
 
 
 async def browser_login_start_api(request: web.Request) -> web.Response:
@@ -483,18 +599,22 @@ def create_app(
     payment_created_callback: Optional[PaymentCreatedCallback] = None,
     order_created_callback: Optional[OrderCreatedCallback] = None,
     otp_sender_callback: Optional[OtpSenderCallback] = None,
+    mailing_start_callback: Optional[MailingStartCallback] = None,
 ) -> web.Application:
     app = web.Application(middlewares=[cors_middleware])
     app["storage"] = storage or create_storage_from_env()
     app["payment_created_callback"] = payment_created_callback
     app["order_created_callback"] = order_created_callback
     app["otp_sender_callback"] = otp_sender_callback
+    app["mailing_start_callback"] = mailing_start_callback
     app.router.add_get("/health", health)
     app.router.add_get("/assets/telegram.lottie", telegram_lottie)
     app.router.add_get("/", index)
     app.router.add_get("/app", index)
     app.router.add_get("/api/mini/config", config_api)
     app.router.add_get("/api/mini/locations", locations_api)
+    app.router.add_post("/api/ai/classify-message", classify_message_api)
+    app.router.add_post("/api/mini/mailing/start", mailing_start_api)
     app.router.add_post("/api/auth/browser-login/start", browser_login_start_api)
     app.router.add_get("/api/auth/browser-login/check", browser_login_check_api)
     app.router.add_post("/api/auth/request-otp", request_otp_api)

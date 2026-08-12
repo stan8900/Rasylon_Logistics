@@ -775,6 +775,39 @@ async def notify_admins_about_mini_order(order: Dict[str, Any]) -> None:
             logger.error("Не удалось отправить заявку Mini App админу %s: %s", admin_id, exc)
 
 
+async def start_mini_mailing(
+    user_id: int,
+    message: str,
+    interval_minutes: int,
+    classification: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    await storage.set_auto_message(user_id, message)
+    await storage.set_auto_interval(user_id, interval_minutes)
+    await storage.set_auto_enabled(user_id, True)
+    await storage.record_auto_campaign_start(user_id)
+    auto_sender: Optional[AutoSender] = bot.get("auto_sender")
+    if auto_sender:
+        await auto_sender.refresh_user(user_id)
+    location = (classification or {}).get("current_location") or "не определена"
+    confidence = float((classification or {}).get("confidence") or 0)
+    admin_text = (
+        "▶️ <b>Рассылка запущена из Mini App</b>\n"
+        f"Пользователь: <code>{user_id}</code>\n"
+        f"Интервал: <b>{interval_minutes} мин.</b>\n"
+        f"Локация AI: <b>{quote_html(str(location))}</b>\n"
+        f"Уверенность: <b>{round(confidence * 100)}%</b>\n\n"
+        f"<code>{quote_html(message[:1000])}</code>"
+    )
+    for admin_id in await collect_admin_ids():
+        if not await is_admin_user(admin_id):
+            continue
+        try:
+            await bot.send_message(admin_id, admin_text)
+        except exceptions.TelegramAPIError as exc:
+            logger.error("Не удалось уведомить админа о запуске рассылки %s: %s", admin_id, exc)
+    return {"started": True, "interval_minutes": interval_minutes}
+
+
 def build_user_payment_status_message(status: str, resolved_at: Optional[str]) -> str:
     if status == "approved":
         expires_text = ""
