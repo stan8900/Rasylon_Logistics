@@ -93,6 +93,7 @@ let isAuthenticated = false;
 let browserLoginToken: string | null = null;
 let browserLoginPoll: number | null = null;
 let currentTelegramUser: TelegramUser | null = tg?.initDataUnsafe?.user || null;
+let authToken: string | null = window.localStorage.getItem("rasylon_auth_token");
 let selectedLocationId = "tashkent";
 let radiusKm = 120;
 let query = "";
@@ -275,8 +276,9 @@ app.innerHTML = `
       </section>
       <div class="section-head">
         <h1>Запуск рассылки</h1>
-        <button id="classifyMessage">AI сортировка</button>
+        <button id="refreshMailingStatus">Статус</button>
       </div>
+      <div class="mailing-status" id="mailingStatusBox">Проверяем доступ к рассылке...</div>
       <form class="panel mailing-panel" id="mailingForm">
         <label>Текст рассылки<textarea id="mailingMessage" placeholder="Например: Ташкент, тент, ищу груз на Алматы, готов сегодня"></textarea></label>
         <div class="otp-grid">
@@ -415,6 +417,7 @@ function basePayload(): Record<string, unknown> {
   return {
     tg_init_data: tg?.initData || "",
     telegram_user: currentTelegramUser,
+    auth_token: authToken,
   };
 }
 
@@ -635,6 +638,46 @@ function renderClassification(classification: MessageClassification): void {
   `;
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function reasonText(reason: string): string {
+  return {
+    no_targets: "Не выбраны Telegram-группы для рассылки.",
+    payment_required: "Нет активной оплаты пользователя.",
+    system_payment_required: "Общая оплата сервиса не активна.",
+  }[reason] || reason;
+}
+
+async function loadMailingStatus(): Promise<void> {
+  const box = byId("mailingStatusBox");
+  try {
+    const data = await postJson<{
+      is_enabled: boolean;
+      target_count: number;
+      can_start: boolean;
+      reasons: string[];
+      sender_account?: { title?: string; phone?: string; username?: string } | null;
+    }>("/api/mini/mailing/status", basePayload());
+    const account = data.sender_account?.title || data.sender_account?.phone || data.sender_account?.username || "бот";
+    box.innerHTML = `
+      <strong>${data.can_start ? "Готово к запуску" : "Нужно настроить"}</strong>
+      <span>Групп выбрано: ${data.target_count}</span>
+      <span>Отправитель: ${escapeHtml(account)}</span>
+      <span>Статус: ${data.is_enabled ? "рассылка активна" : "рассылка остановлена"}</span>
+      ${data.reasons.length ? `<em>${escapeHtml(data.reasons.map(reasonText).join(" "))}</em>` : ""}
+    `;
+  } catch {
+    box.textContent = "Войдите через Telegram, чтобы увидеть статус рассылки.";
+  }
+}
+
 async function classifyMailingMessage(): Promise<MessageClassification | null> {
   const message = byId<HTMLTextAreaElement>("mailingMessage").value.trim();
   if (!message) {
@@ -654,13 +697,19 @@ async function startMailing(event: SubmitEvent): Promise<void> {
     const classification = await classifyMailingMessage();
     const message = byId<HTMLTextAreaElement>("mailingMessage").value.trim();
     const interval = Number(byId<HTMLInputElement>("mailingInterval").value || "10");
-    await postJson("/api/mini/mailing/start", {
+    const result = await postJson<{ started?: boolean; reasons?: string[] }>("/api/mini/mailing/start", {
       ...basePayload(),
       message,
       interval_minutes: interval,
       classification,
     });
+    if (!result.started) {
+      setStatus(status, (result.reasons || []).map(reasonText).join(" ") || "Рассылка не запущена.");
+      await loadMailingStatus();
+      return;
+    }
     setStatus(status, "Авторассылка запущена. Бот будет отправлять сообщение по расписанию.", true);
+    await loadMailingStatus();
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     setStatus(status, code === "auth_required" ? "Сначала войдите через Telegram." : "Не удалось запустить рассылку.");
@@ -704,12 +753,16 @@ async function checkBrowserLogin(): Promise<void> {
   if (!browserLoginToken) return;
   try {
     const response = await fetch(`${API_BASE}/api/auth/browser-login/check?token=${encodeURIComponent(browserLoginToken)}`);
-    const data = await response.json() as { status?: string; telegram_user?: TelegramUser };
+    const data = await response.json() as { status?: string; telegram_user?: TelegramUser; auth_token?: string };
     if (data.status === "confirmed") {
       if (browserLoginPoll !== null) window.clearInterval(browserLoginPoll);
       browserLoginPoll = null;
       browserLoginToken = null;
       isAuthenticated = true;
+      if (data.auth_token) {
+        authToken = data.auth_token;
+        window.localStorage.setItem("rasylon_auth_token", data.auth_token);
+      }
       const userInfo = data.telegram_user;
       if (userInfo) {
         currentTelegramUser = userInfo;
@@ -719,6 +772,7 @@ async function checkBrowserLogin(): Promise<void> {
         byId("telegramValue").textContent = userInfo.username ? `@${userInfo.username}` : `ID ${userInfo.id}`;
       }
       setScreen("dashboard");
+      await loadMailingStatus();
       return;
     }
     if (data.status === "expired" && browserLoginPoll !== null) {
@@ -805,8 +859,8 @@ byId<HTMLButtonElement>("clearLocations").addEventListener("click", () => {
   renderLocations();
 });
 byId<HTMLButtonElement>("refreshSignals").addEventListener("click", () => void loadSignals());
-byId<HTMLButtonElement>("classifyMessage").addEventListener("click", () => void classifyMailingMessage());
 byId<HTMLButtonElement>("classifyMessageInline").addEventListener("click", () => void classifyMailingMessage());
+byId<HTMLButtonElement>("refreshMailingStatus").addEventListener("click", () => void loadMailingStatus());
 byId<HTMLFormElement>("mailingForm").addEventListener("submit", (event) => void startMailing(event as SubmitEvent));
 byId<HTMLButtonElement>("openBotLogin").addEventListener("click", () => void startBrowserLogin());
 byId<HTMLButtonElement>("sendOtp").addEventListener("click", () => void sendOtp());
@@ -818,6 +872,8 @@ byId<HTMLButtonElement>("openBot").addEventListener("click", () => {
 });
 byId<HTMLButtonElement>("logoutButton").addEventListener("click", () => {
   isAuthenticated = false;
+  authToken = null;
+  window.localStorage.removeItem("rasylon_auth_token");
   byId("profileMeta").textContent = "Telegram не привязан";
   byId("phoneValue").textContent = "не указан";
   setScreen("card");
@@ -830,13 +886,19 @@ document.querySelector<HTMLElement>('[data-action="support"]')?.addEventListener
 
 const user = tg?.initDataUnsafe?.user;
 if (user) {
+  isAuthenticated = true;
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || "Telegram user";
   byId("profileName").textContent = name;
   byId("profileMeta").textContent = user.username ? `@${user.username}` : "Telegram WebApp";
   byId("telegramValue").textContent = user.username ? `@${user.username}` : `ID ${user.id}`;
 }
+if (authToken) {
+  isAuthenticated = true;
+  activeScreen = "dashboard";
+}
 
 renderAll();
 void loadConfig();
 void loadSignals();
+void loadMailingStatus();
 setScreen(activeScreen);

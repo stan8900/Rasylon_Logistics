@@ -781,6 +781,9 @@ async def start_mini_mailing(
     interval_minutes: int,
     classification: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    status = await get_mini_mailing_status(user_id)
+    if not status["can_start"]:
+        return {"started": False, "blocked": True, "reasons": status["reasons"], **status}
     await storage.set_auto_message(user_id, message)
     await storage.set_auto_interval(user_id, interval_minutes)
     await storage.set_auto_enabled(user_id, True)
@@ -806,6 +809,38 @@ async def start_mini_mailing(
         except exceptions.TelegramAPIError as exc:
             logger.error("Не удалось уведомить админа о запуске рассылки %s: %s", admin_id, exc)
     return {"started": True, "interval_minutes": interval_minutes}
+
+
+async def get_mini_mailing_status(user_id: int) -> Dict[str, Any]:
+    auto = await storage.get_auto(user_id)
+    targets = auto.get("target_chat_ids") or []
+    user_payment = await storage.has_recent_payment_for_user(user_id, within_days=PAYMENT_VALID_DAYS)
+    global_payment = await storage.has_recent_payment(within_days=PAYMENT_VALID_DAYS)
+    reasons = []
+    if not targets:
+        reasons.append("no_targets")
+    if not user_payment:
+        reasons.append("payment_required")
+    if not global_payment:
+        reasons.append("system_payment_required")
+    selected_account = None
+    sender_account_id = auto.get("sender_account_id")
+    if sender_account_id is not None:
+        selected_account = await storage.get_user_account(int(sender_account_id), owner_id=user_id)
+    return {
+        "is_enabled": bool(auto.get("is_enabled")),
+        "message": auto.get("message") or "",
+        "interval_minutes": int(auto.get("interval_minutes") or 0),
+        "target_count": len(targets),
+        "sender_account": {
+            "id": selected_account.get("id"),
+            "title": selected_account.get("title"),
+            "phone": mask_phone(selected_account.get("phone")),
+            "username": selected_account.get("username"),
+        } if selected_account else None,
+        "can_start": not reasons,
+        "reasons": reasons,
+    }
 
 
 def build_user_payment_status_message(status: str, resolved_at: Optional[str]) -> str:

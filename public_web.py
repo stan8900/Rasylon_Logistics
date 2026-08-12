@@ -31,12 +31,15 @@ PaymentCreatedCallback = Callable[[int, str], Awaitable[None]]
 OrderCreatedCallback = Callable[[Dict[str, Any]], Awaitable[None]]
 OtpSenderCallback = Callable[[str, str, Optional[int]], Awaitable[None]]
 MailingStartCallback = Callable[[int, str, int, Optional[Dict[str, Any]]], Awaitable[Dict[str, Any]]]
+MailingStatusCallback = Callable[[int], Awaitable[Dict[str, Any]]]
 OTP_TTL_SECONDS = int(os.getenv("OTP_TTL_SECONDS", "300"))
 OTP_RESEND_SECONDS = int(os.getenv("OTP_RESEND_SECONDS", "60"))
 OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
 OTP_STORE: Dict[str, Dict[str, Any]] = {}
 BROWSER_LOGIN_TTL_SECONDS = int(os.getenv("BROWSER_LOGIN_TTL_SECONDS", "300"))
 BROWSER_LOGIN_STORE: Dict[str, Dict[str, Any]] = {}
+AUTH_SESSION_TTL_SECONDS = int(os.getenv("AUTH_SESSION_TTL_SECONDS", "604800"))
+AUTH_SESSION_STORE: Dict[str, Dict[str, Any]] = {}
 KNOWN_LOCATION_ALIASES = {
     "таш": "Ташкент",
     "tash": "Ташкент",
@@ -112,6 +115,13 @@ def prune_browser_logins() -> None:
     ]
     for token in expired_tokens:
         BROWSER_LOGIN_STORE.pop(token, None)
+    expired_sessions = [
+        token
+        for token, record in AUTH_SESSION_STORE.items()
+        if current_time > record["expires_at"]
+    ]
+    for token in expired_sessions:
+        AUTH_SESSION_STORE.pop(token, None)
 
 
 def confirm_browser_login(token: str, telegram_user: Dict[str, Any]) -> bool:
@@ -122,6 +132,34 @@ def confirm_browser_login(token: str, telegram_user: Dict[str, Any]) -> bool:
     record["confirmed_user"] = telegram_user
     record["confirmed_at"] = now_utc()
     return True
+
+
+def create_auth_session(telegram_user: Dict[str, Any]) -> str:
+    token = secrets.token_urlsafe(32)
+    AUTH_SESSION_STORE[token] = {
+        "telegram_user": telegram_user,
+        "created_at": now_utc(),
+        "expires_at": now_utc() + timedelta(seconds=AUTH_SESSION_TTL_SECONDS),
+    }
+    return token
+
+
+def auth_user_from_token(token: str) -> Optional[Dict[str, Any]]:
+    prune_browser_logins()
+    record = AUTH_SESSION_STORE.get(token)
+    if not record:
+        return None
+    return record.get("telegram_user")
+
+
+def resolve_authenticated_user(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    telegram_user = verify_telegram_init_data(str(data.get("tg_init_data") or ""))
+    if telegram_user:
+        return telegram_user
+    auth_token = str(data.get("auth_token") or "")
+    if auth_token:
+        return auth_user_from_token(auth_token)
+    return None
 
 
 def normalize_location_text(value: str) -> Optional[str]:
@@ -345,9 +383,7 @@ async def classify_message_api(request: web.Request) -> web.Response:
 
 async def mailing_start_api(request: web.Request) -> web.Response:
     data = await request.json()
-    telegram_user = verify_telegram_init_data(str(data.get("tg_init_data") or ""))
-    if telegram_user is None and isinstance(data.get("telegram_user"), dict):
-        telegram_user = data["telegram_user"]
+    telegram_user = resolve_authenticated_user(data)
     user_id = None
     if telegram_user:
         try:
@@ -376,6 +412,35 @@ async def mailing_start_api(request: web.Request) -> web.Response:
         await request.app["storage"].set_auto_enabled(user_id, True)
         result = {"ok": True, "started": True}
     return web.json_response({"ok": True, "classification": classification, **result})
+
+
+async def mailing_status_api(request: web.Request) -> web.Response:
+    data = await request.json()
+    telegram_user = resolve_authenticated_user(data)
+    user_id = None
+    if telegram_user:
+        try:
+            user_id = int(telegram_user.get("id"))
+        except (TypeError, ValueError):
+            user_id = None
+    if user_id is None:
+        return web.json_response({"error": "auth_required"}, status=401)
+    callback: Optional[MailingStatusCallback] = request.app.get("mailing_status_callback")
+    if callback:
+        return web.json_response({"ok": True, **await callback(user_id)})
+    auto = await request.app["storage"].get_auto(user_id)
+    target_count = len(auto.get("target_chat_ids") or [])
+    return web.json_response(
+        {
+            "ok": True,
+            "is_enabled": bool(auto.get("is_enabled")),
+            "message": auto.get("message") or "",
+            "interval_minutes": int(auto.get("interval_minutes") or 0),
+            "target_count": target_count,
+            "can_start": target_count > 0,
+            "reasons": [] if target_count > 0 else ["no_targets"],
+        }
+    )
 
 
 async def browser_login_start_api(request: web.Request) -> web.Response:
@@ -409,7 +474,13 @@ async def browser_login_check_api(request: web.Request) -> web.Response:
     if not confirmed_user:
         return web.json_response({"status": "pending"})
     BROWSER_LOGIN_STORE.pop(token, None)
-    return web.json_response({"status": "confirmed", "telegram_user": confirmed_user})
+    return web.json_response(
+        {
+            "status": "confirmed",
+            "telegram_user": confirmed_user,
+            "auth_token": create_auth_session(confirmed_user),
+        }
+    )
 
 
 async def request_otp_api(request: web.Request) -> web.Response:
@@ -600,6 +671,7 @@ def create_app(
     order_created_callback: Optional[OrderCreatedCallback] = None,
     otp_sender_callback: Optional[OtpSenderCallback] = None,
     mailing_start_callback: Optional[MailingStartCallback] = None,
+    mailing_status_callback: Optional[MailingStatusCallback] = None,
 ) -> web.Application:
     app = web.Application(middlewares=[cors_middleware])
     app["storage"] = storage or create_storage_from_env()
@@ -607,6 +679,7 @@ def create_app(
     app["order_created_callback"] = order_created_callback
     app["otp_sender_callback"] = otp_sender_callback
     app["mailing_start_callback"] = mailing_start_callback
+    app["mailing_status_callback"] = mailing_status_callback
     app.router.add_get("/health", health)
     app.router.add_get("/assets/telegram.lottie", telegram_lottie)
     app.router.add_get("/", index)
@@ -615,6 +688,7 @@ def create_app(
     app.router.add_get("/api/mini/locations", locations_api)
     app.router.add_post("/api/ai/classify-message", classify_message_api)
     app.router.add_post("/api/mini/mailing/start", mailing_start_api)
+    app.router.add_post("/api/mini/mailing/status", mailing_status_api)
     app.router.add_post("/api/auth/browser-login/start", browser_login_start_api)
     app.router.add_get("/api/auth/browser-login/check", browser_login_check_api)
     app.router.add_post("/api/auth/request-otp", request_otp_api)
