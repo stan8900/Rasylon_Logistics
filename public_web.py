@@ -28,7 +28,7 @@ SUPPORT_AGENT_USERNAME = os.getenv("SUPPORT_AGENT_USERNAME", "@rasylon_support")
 ADMIN_REDIRECT_URL = os.getenv("ADMIN_REDIRECT_URL", "https://rasylon-support-production.up.railway.app/")
 PaymentCreatedCallback = Callable[[int, str], Awaitable[None]]
 OrderCreatedCallback = Callable[[Dict[str, Any]], Awaitable[None]]
-OtpSenderCallback = Callable[[str, str], Awaitable[None]]
+OtpSenderCallback = Callable[[str, str, Optional[int]], Awaitable[None]]
 OTP_TTL_SECONDS = int(os.getenv("OTP_TTL_SECONDS", "300"))
 OTP_RESEND_SECONDS = int(os.getenv("OTP_RESEND_SECONDS", "60"))
 OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
@@ -244,6 +244,15 @@ async def request_otp_api(request: web.Request) -> web.Response:
     phone = normalize_phone(str(data.get("phone") or ""))
     if not phone:
         return web.json_response({"error": "phone_required"}, status=400)
+    telegram_user = verify_telegram_init_data(str(data.get("tg_init_data") or ""))
+    if telegram_user is None and isinstance(data.get("telegram_user"), dict):
+        telegram_user = data["telegram_user"]
+    telegram_user_id: Optional[int] = None
+    if telegram_user:
+        try:
+            telegram_user_id = int(telegram_user.get("id"))
+        except (TypeError, ValueError):
+            telegram_user_id = None
 
     record = OTP_STORE.get(phone)
     current_time = now_utc()
@@ -263,7 +272,7 @@ async def request_otp_api(request: web.Request) -> web.Response:
     sender: Optional[OtpSenderCallback] = request.app.get("otp_sender_callback")
     if sender:
         try:
-            await sender(phone, otp)
+            await sender(phone, otp, telegram_user_id)
         except Exception:
             logger.exception("Failed to send OTP to Telegram user.")
             OTP_STORE.pop(phone, None)
