@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
@@ -31,12 +31,14 @@ class AutoSender:
         *,
         user_sender: Optional[UserSender] = None,
         account_manager: Optional[AccountManager] = None,
+        error_notifier: Optional[Callable[[int, List[str]], Awaitable[None]]] = None,
     ) -> None:
         self._bot = bot
         self._storage = storage
         self._payment_valid_days = max(0, payment_valid_days)
         self._user_sender = user_sender
         self._account_manager = account_manager
+        self._error_notifier = error_notifier
         self._personal_chats: Dict[int, str] = {}
         self._personal_chats_last_refresh_at = 0.0
         self._personal_chats_refresh_lock = asyncio.Lock()
@@ -216,6 +218,8 @@ class AutoSender:
                     except Exception as exc:  # pragma: no cover - network errors
                         errors.append(f"Ошибка доставки в чат {chat_id}: {exc}")
                 await self._storage.update_stats(user_id, sent=success, errors=errors)
+                if errors and self._error_notifier:
+                    await self._error_notifier(user_id, errors)
                 if should_stop:
                     break
 

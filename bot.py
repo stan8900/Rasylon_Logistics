@@ -721,6 +721,29 @@ async def notify_admins_about_payment(requester_id: int, request_id: str) -> Non
             logger.error("Не удалось уведомить админа %s: %s", admin_id, exc)
 
 
+async def notify_admins_about_auto_errors(user_id: int, errors: List[str]) -> None:
+    if not errors:
+        return
+    visible_errors = errors[:20]
+    error_text = "\n".join(visible_errors)
+    if len(errors) > len(visible_errors):
+        error_text += f"\n... ещё {len(errors) - len(visible_errors)} ошибок"
+    if len(error_text) > 3000:
+        error_text = error_text[:2997] + "..."
+    text = (
+        "⚠️ <b>Ошибки авторассылки</b>\n"
+        f"Пользователь: <code>{user_id}</code>\n\n"
+        f"<code>{quote_html(error_text)}</code>"
+    )
+    for admin_id in await collect_admin_ids():
+        if not await is_admin_user(admin_id):
+            continue
+        try:
+            await bot.send_message(admin_id, text)
+        except exceptions.TelegramAPIError as exc:
+            logger.error("Не удалось отправить ошибки авторассылки админу %s: %s", admin_id, exc)
+
+
 def build_user_payment_status_message(status: str, resolved_at: Optional[str]) -> str:
     if status == "approved":
         expires_text = ""
@@ -2940,6 +2963,7 @@ async def on_startup(dispatcher: Dispatcher) -> None:
         PAYMENT_VALID_DAYS,
         user_sender=user_sender_instance,
         account_manager=account_manager,
+        error_notifier=notify_admins_about_auto_errors,
     )
     dispatcher.bot["auto_sender"] = auto_sender
     if user_sender_instance:

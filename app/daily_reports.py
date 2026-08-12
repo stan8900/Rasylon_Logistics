@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Set
@@ -127,11 +126,6 @@ def format_daily_report(stats: DailyReportStats, timezone: ZoneInfo) -> str:
         "",
         f"<code>{chart}</code>",
     ]
-    if stats.last_error:
-        error_text = html.escape(str(stats.last_error))
-        if len(error_text) > 600:
-            error_text = error_text[:597] + "..."
-        lines.extend(["", f"Последняя ошибка:\n<code>{error_text}</code>"])
     return "\n".join(lines)
 
 
