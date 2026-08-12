@@ -189,6 +189,16 @@ app.innerHTML = `
     </header>
 
     <section class="screen active" data-screen="dashboard">
+      <section class="editorial-hero">
+        <div class="hero-rule"><span></span></div>
+        <p>Telegram intelligence / driver locations</p>
+        <h1>DRIVERS</h1>
+        <div class="hero-copy">
+          <strong>Live activity map</strong>
+          <span>Водители появляются из сообщений Telegram-групп после parser, AI classification и geocoding.</span>
+        </div>
+      </section>
+
       <section class="live-map" aria-label="Карта активности водителей">
         <div class="map-grid"></div>
         <div class="map-road road-main"></div>
@@ -207,7 +217,7 @@ app.innerHTML = `
         <div id="mapPins"></div>
       </section>
 
-      <section class="live-summary">
+      <section class="live-summary inverted">
         <div>
           <span>Сейчас ищут груз</span>
           <strong id="totalDrivers">0</strong>
@@ -242,6 +252,10 @@ app.innerHTML = `
     </section>
 
     <section class="screen" data-screen="messages">
+      <section class="editorial-strip">
+        <span>Source</span>
+        <strong>Telegram messages become map signals.</strong>
+      </section>
       <div class="section-head">
         <h1>Telegram сигналы</h1>
         <button id="simulateMessage">+ сигнал</button>
@@ -253,6 +267,10 @@ app.innerHTML = `
     </section>
 
     <section class="screen" data-screen="profile">
+      <section class="editorial-strip">
+        <span>Account</span>
+        <strong>Все настройки, оплата и подписка находятся здесь.</strong>
+      </section>
       <div class="profile-card">
         <div class="avatar" id="avatar">RL</div>
         <div>
