@@ -744,6 +744,36 @@ async def notify_admins_about_auto_errors(user_id: int, errors: List[str]) -> No
             logger.error("Не удалось отправить ошибки авторассылки админу %s: %s", admin_id, exc)
 
 
+async def notify_admins_about_mini_order(order: Dict[str, Any]) -> None:
+    telegram_user = order.get("telegram_user") or {}
+    user_bits = []
+    if telegram_user.get("id"):
+        user_bits.append(f"ID <code>{telegram_user.get('id')}</code>")
+    if telegram_user.get("username"):
+        user_bits.append(f"@{quote_html(str(telegram_user.get('username')))}")
+    user_text = ", ".join(user_bits) or "неизвестен"
+    lines = [
+        "🚚 <b>Новая заявка из Mini App</b>",
+        f"Маршрут: <b>{quote_html(str(order.get('from') or '—'))}</b> → <b>{quote_html(str(order.get('to') or '—'))}</b>",
+        f"Техника: {quote_html(str(order.get('truck_type') or '—'))}",
+        f"Вес/объём: {quote_html(str(order.get('weight') or '—'))}",
+        f"Дата: {quote_html(str(order.get('date') or '—'))}",
+        f"Телефон: <code>{quote_html(str(order.get('phone') or '—'))}</code>",
+        f"Telegram: {user_text}",
+    ]
+    note = str(order.get("note") or "").strip()
+    if note:
+        lines.append(f"Комментарий: {quote_html(note[:800])}")
+    text = "\n".join(lines)
+    for admin_id in await collect_admin_ids():
+        if not await is_admin_user(admin_id):
+            continue
+        try:
+            await bot.send_message(admin_id, text)
+        except exceptions.TelegramAPIError as exc:
+            logger.error("Не удалось отправить заявку Mini App админу %s: %s", admin_id, exc)
+
+
 def build_user_payment_status_message(status: str, resolved_at: Optional[str]) -> str:
     if status == "approved":
         expires_text = ""

@@ -18,6 +18,7 @@ async def run_web(stop_event: asyncio.Event) -> web.AppRunner:
     app = create_app(
         storage=bot_module.storage,
         payment_created_callback=bot_module.notify_admins_about_payment,
+        order_created_callback=bot_module.notify_admins_about_mini_order,
     )
     runner = web.AppRunner(app)
     await runner.setup()

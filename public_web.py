@@ -25,6 +25,7 @@ BOT_USERNAME = (os.getenv("BOT_USERNAME") or os.getenv("TELEGRAM_BOT_USERNAME") 
 SUPPORT_AGENT_USERNAME = os.getenv("SUPPORT_AGENT_USERNAME", "@rasylon_support")
 ADMIN_REDIRECT_URL = os.getenv("ADMIN_REDIRECT_URL", "https://rasylon-support-production.up.railway.app/")
 PaymentCreatedCallback = Callable[[int, str], Awaitable[None]]
+OrderCreatedCallback = Callable[[Dict[str, Any]], Awaitable[None]]
 
 
 def money(amount: int) -> str:
@@ -80,6 +81,9 @@ def verify_telegram_init_data(init_data: str) -> Optional[Dict[str, Any]]:
 
 
 async def index(request: web.Request) -> web.Response:
+    app_path = BASE_DIR / "public_app.html"
+    if app_path.exists():
+        return web.Response(text=app_path.read_text(encoding="utf-8"), content_type="text/html")
     return web.Response(text=PUBLIC_APP_HTML, content_type="text/html")
 
 
@@ -176,6 +180,38 @@ async def payment_api(request: web.Request) -> web.Response:
     )
 
 
+async def order_api(request: web.Request) -> web.Response:
+    data = await request.json()
+    telegram_user = verify_telegram_init_data(str(data.get("tg_init_data") or ""))
+    if telegram_user is None and isinstance(data.get("telegram_user"), dict):
+        telegram_user = data["telegram_user"]
+
+    contact_phone = normalize_phone(str(data.get("phone") or ""))
+    if not contact_phone:
+        return web.json_response({"error": "phone_required"}, status=400)
+
+    order = {
+        "from": str(data.get("from") or "").strip(),
+        "to": str(data.get("to") or "").strip(),
+        "truck_type": str(data.get("truck_type") or "").strip(),
+        "weight": str(data.get("weight") or "").strip(),
+        "date": str(data.get("date") or "").strip(),
+        "phone": contact_phone,
+        "note": str(data.get("note") or "").strip(),
+        "telegram_user": telegram_user,
+    }
+    if not order["from"] or not order["to"] or not order["truck_type"]:
+        return web.json_response({"error": "route_required"}, status=400)
+
+    callback: Optional[OrderCreatedCallback] = request.app.get("order_created_callback")
+    if callback:
+        try:
+            await callback(order)
+        except Exception:
+            logger.exception("Failed to notify admins about Mini App order.")
+    return web.json_response({"ok": True, "bot_url": f"https://t.me/{BOT_USERNAME}" if BOT_USERNAME else None})
+
+
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
@@ -184,10 +220,12 @@ def create_app(
     storage: Optional[Any] = None,
     *,
     payment_created_callback: Optional[PaymentCreatedCallback] = None,
+    order_created_callback: Optional[OrderCreatedCallback] = None,
 ) -> web.Application:
     app = web.Application()
     app["storage"] = storage or create_storage_from_env()
     app["payment_created_callback"] = payment_created_callback
+    app["order_created_callback"] = order_created_callback
     app.router.add_get("/health", health)
     app.router.add_get("/assets/telegram.lottie", telegram_lottie)
     app.router.add_get("/", index)
@@ -195,6 +233,7 @@ def create_app(
     app.router.add_get("/api/mini/config", config_api)
     app.router.add_post("/api/mini/admin-login", admin_login_api)
     app.router.add_post("/api/mini/payment", payment_api)
+    app.router.add_post("/api/mini/order", order_api)
     return app
 
 
