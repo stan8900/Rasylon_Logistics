@@ -33,6 +33,8 @@ OTP_TTL_SECONDS = int(os.getenv("OTP_TTL_SECONDS", "300"))
 OTP_RESEND_SECONDS = int(os.getenv("OTP_RESEND_SECONDS", "60"))
 OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
 OTP_STORE: Dict[str, Dict[str, Any]] = {}
+BROWSER_LOGIN_TTL_SECONDS = int(os.getenv("BROWSER_LOGIN_TTL_SECONDS", "300"))
+BROWSER_LOGIN_STORE: Dict[str, Dict[str, Any]] = {}
 
 
 @web.middleware
@@ -80,6 +82,27 @@ def fallback_user_id(phone: str) -> int:
 
 def now_utc() -> datetime:
     return datetime.utcnow()
+
+
+def prune_browser_logins() -> None:
+    current_time = now_utc()
+    expired_tokens = [
+        token
+        for token, record in BROWSER_LOGIN_STORE.items()
+        if current_time > record["expires_at"]
+    ]
+    for token in expired_tokens:
+        BROWSER_LOGIN_STORE.pop(token, None)
+
+
+def confirm_browser_login(token: str, telegram_user: Dict[str, Any]) -> bool:
+    prune_browser_logins()
+    record = BROWSER_LOGIN_STORE.get(token)
+    if not record or record.get("confirmed_user"):
+        return False
+    record["confirmed_user"] = telegram_user
+    record["confirmed_at"] = now_utc()
+    return True
 
 
 def public_locations_payload() -> Dict[str, Any]:
@@ -237,6 +260,40 @@ async def config_api(request: web.Request) -> web.Response:
 
 async def locations_api(request: web.Request) -> web.Response:
     return web.json_response(public_locations_payload())
+
+
+async def browser_login_start_api(request: web.Request) -> web.Response:
+    prune_browser_logins()
+    token = secrets.token_urlsafe(24)
+    BROWSER_LOGIN_STORE[token] = {
+        "created_at": now_utc(),
+        "expires_at": now_utc() + timedelta(seconds=BROWSER_LOGIN_TTL_SECONDS),
+        "confirmed_user": None,
+    }
+    bot_url = f"https://t.me/{BOT_USERNAME}?start=login_{token}" if BOT_USERNAME else None
+    return web.json_response(
+        {
+            "ok": True,
+            "token": token,
+            "bot_url": bot_url,
+            "expires_in": BROWSER_LOGIN_TTL_SECONDS,
+        }
+    )
+
+
+async def browser_login_check_api(request: web.Request) -> web.Response:
+    prune_browser_logins()
+    token = str(request.query.get("token") or "")
+    if not token:
+        return web.json_response({"error": "token_required"}, status=400)
+    record = BROWSER_LOGIN_STORE.get(token)
+    if not record:
+        return web.json_response({"status": "expired"}, status=404)
+    confirmed_user = record.get("confirmed_user")
+    if not confirmed_user:
+        return web.json_response({"status": "pending"})
+    BROWSER_LOGIN_STORE.pop(token, None)
+    return web.json_response({"status": "confirmed", "telegram_user": confirmed_user})
 
 
 async def request_otp_api(request: web.Request) -> web.Response:
@@ -438,6 +495,8 @@ def create_app(
     app.router.add_get("/app", index)
     app.router.add_get("/api/mini/config", config_api)
     app.router.add_get("/api/mini/locations", locations_api)
+    app.router.add_post("/api/auth/browser-login/start", browser_login_start_api)
+    app.router.add_get("/api/auth/browser-login/check", browser_login_check_api)
     app.router.add_post("/api/auth/request-otp", request_otp_api)
     app.router.add_post("/api/auth/verify-otp", verify_otp_api)
     app.router.add_post("/api/mini/admin-login", admin_login_api)

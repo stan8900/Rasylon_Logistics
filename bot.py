@@ -47,6 +47,7 @@ from app.states import (
     SharedProxyStates,
 )
 from app.user_sender import UserSender, build_telethon_proxy
+from public_web import confirm_browser_login
 from telethon import TelegramClient
 from telethon.errors import (
     FloodWaitError,
@@ -1634,6 +1635,20 @@ async def cmd_start(message: types.Message, state: FSMContext) -> None:
     if await answer_sleep_message_if_needed(message):
         return
     await state.finish()
+    args = message.get_args().strip() if hasattr(message, "get_args") else ""
+    if args.startswith("login_"):
+        token = args.removeprefix("login_")
+        telegram_user = {
+            "id": message.from_user.id if message.from_user else message.chat.id,
+            "username": message.from_user.username if message.from_user else None,
+            "first_name": message.from_user.first_name if message.from_user else None,
+            "last_name": message.from_user.last_name if message.from_user else None,
+        }
+        if confirm_browser_login(token, telegram_user):
+            await message.answer("Вход подтвержден. Вернитесь на сайт, dashboard откроется автоматически.")
+            return
+        await message.answer("Ссылка для входа истекла или уже использована. Вернитесь на сайт и запросите новую.")
+        return
     await send_mini_app_gate(message)
 
 

@@ -752,6 +752,23 @@ p {
   border-radius: 3.5rem 2rem 2.6rem 2rem;
 }
 
+.divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  height: 1px;
+  background: rgba(222, 216, 207, .95);
+}
+
 .profile-card {
   padding: 18px;
   display: grid;

@@ -75,6 +75,8 @@ if (tg) {
 let config: MiniConfig | null = null;
 let activeScreen = "card";
 let isAuthenticated = false;
+let browserLoginToken: string | null = null;
+let browserLoginPoll: number | null = null;
 let selectedLocationId = "tashkent";
 let radiusKm = 120;
 let query = "";
@@ -277,6 +279,8 @@ app.innerHTML = `
 
         <form class="panel login-panel" id="otpForm">
           <h2>Подтверждение номера</h2>
+          <button class="primary-button wide" type="button" id="openBotLogin">Войти через Telegram-бота</button>
+          <div class="divider"><span>или OTP по номеру</span></div>
           <div class="otp-grid">
             <label>Телефон<input id="authPhone" inputmode="tel" autocomplete="tel" placeholder="+998..." /></label>
             <button class="secondary-button" type="button" id="sendOtp">Получить OTP</button>
@@ -570,6 +574,54 @@ async function sendOtp(): Promise<void> {
   }
 }
 
+async function startBrowserLogin(): Promise<void> {
+  const status = byId<HTMLDivElement>("otpStatus");
+  setStatus(status, "");
+  try {
+    const response = await postJson<{ token: string; bot_url: string | null }>("/api/auth/browser-login/start", {});
+    browserLoginToken = response.token;
+    if (browserLoginPoll !== null) window.clearInterval(browserLoginPoll);
+    browserLoginPoll = window.setInterval(() => void checkBrowserLogin(), 1800);
+    setStatus(status, "Откройте Telegram-бота и нажмите Start. После подтверждения dashboard откроется автоматически.", true);
+    if (response.bot_url) {
+      window.open(response.bot_url, "_blank", "noopener,noreferrer");
+    }
+  } catch {
+    setStatus(status, "Не удалось создать ссылку для входа. Попробуйте позже.");
+  }
+}
+
+async function checkBrowserLogin(): Promise<void> {
+  if (!browserLoginToken) return;
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/browser-login/check?token=${encodeURIComponent(browserLoginToken)}`);
+    const data = await response.json() as { status?: string; telegram_user?: TelegramUser };
+    if (data.status === "confirmed") {
+      if (browserLoginPoll !== null) window.clearInterval(browserLoginPoll);
+      browserLoginPoll = null;
+      browserLoginToken = null;
+      isAuthenticated = true;
+      const userInfo = data.telegram_user;
+      if (userInfo) {
+        const name = [userInfo.first_name, userInfo.last_name].filter(Boolean).join(" ") || userInfo.username || "Telegram user";
+        byId("profileName").textContent = name;
+        byId("profileMeta").textContent = userInfo.username ? `@${userInfo.username}` : `ID ${userInfo.id}`;
+        byId("telegramValue").textContent = userInfo.username ? `@${userInfo.username}` : `ID ${userInfo.id}`;
+      }
+      setScreen("dashboard");
+      return;
+    }
+    if (data.status === "expired" && browserLoginPoll !== null) {
+      window.clearInterval(browserLoginPoll);
+      browserLoginPoll = null;
+      browserLoginToken = null;
+      setStatus(byId<HTMLDivElement>("otpStatus"), "Ссылка истекла. Запросите вход через Telegram заново.");
+    }
+  } catch {
+    // Keep polling; short network failures should not cancel the login attempt.
+  }
+}
+
 async function verifyOtp(event: SubmitEvent): Promise<void> {
   event.preventDefault();
   const status = byId<HTMLDivElement>("otpStatus");
@@ -667,6 +719,7 @@ byId<HTMLButtonElement>("clearLocations").addEventListener("click", () => {
 });
 byId<HTMLButtonElement>("refreshSignals").addEventListener("click", () => void loadSignals());
 byId<HTMLButtonElement>("simulateMessage").addEventListener("click", simulateSignal);
+byId<HTMLButtonElement>("openBotLogin").addEventListener("click", () => void startBrowserLogin());
 byId<HTMLButtonElement>("sendOtp").addEventListener("click", () => void sendOtp());
 byId<HTMLFormElement>("otpForm").addEventListener("submit", (event) => void verifyOtp(event as SubmitEvent));
 byId<HTMLFormElement>("paymentForm").addEventListener("submit", (event) => void submitPayment(event as SubmitEvent));
