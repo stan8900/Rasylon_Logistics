@@ -73,7 +73,8 @@ if (tg) {
 }
 
 let config: MiniConfig | null = null;
-let activeScreen = "dashboard";
+let activeScreen = "card";
+let isAuthenticated = false;
 let selectedLocationId = "tashkent";
 let radiusKm = 120;
 let query = "";
@@ -266,6 +267,28 @@ app.innerHTML = `
       <div class="activity-list" id="messageList"></div>
     </section>
 
+    <section class="screen" data-screen="login">
+      <div class="login-shell">
+        <section class="visit-card compact">
+          <div class="avatar large">RL</div>
+          <h1>Вход по Telegram</h1>
+          <p>Введите номер, который привязан к Telegram. Код придет от нашего бота.</p>
+        </section>
+
+        <form class="panel login-panel" id="otpForm">
+          <h2>Подтверждение номера</h2>
+          <div class="otp-grid">
+            <label>Телефон<input id="authPhone" inputmode="tel" autocomplete="tel" placeholder="+998..." /></label>
+            <button class="secondary-button" type="button" id="sendOtp">Получить OTP</button>
+            <label>OTP<input id="authOtp" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" /></label>
+            <button class="primary-button" type="submit">Перейти на dashboard</button>
+          </div>
+          <p class="hint">Если бот еще не связан с номером, откройте Telegram-бота и нажмите /start.</p>
+          <div class="status" id="otpStatus"></div>
+        </form>
+      </div>
+    </section>
+
     <section class="screen" data-screen="profile">
       <section class="editorial-strip">
         <span>Account</span>
@@ -278,18 +301,6 @@ app.innerHTML = `
           <p id="profileMeta">Telegram не привязан</p>
         </div>
       </div>
-
-      <form class="panel" id="otpForm">
-        <h2>Вход по номеру Telegram</h2>
-        <p>Введите номер, получите OTP в Telegram-боте и подтвердите вход.</p>
-        <div class="otp-grid">
-          <label>Телефон<input id="authPhone" inputmode="tel" autocomplete="tel" placeholder="+998..." /></label>
-          <button class="secondary-button" type="button" id="sendOtp">Получить OTP</button>
-          <label>OTP<input id="authOtp" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" /></label>
-          <button class="primary-button" type="submit">Войти</button>
-        </div>
-        <div class="status" id="otpStatus"></div>
-      </form>
 
       <div class="panel">
         <h2>Визитка</h2>
@@ -327,12 +338,12 @@ app.innerHTML = `
       <div class="visit-card">
         <div class="avatar large">RL</div>
         <h1>Rasylon Logistics</h1>
-        <p>Мониторинг водителей и локаций из Telegram-групп</p>
+        <p>Теплая карта логистической активности: локации, водители и Telegram-сигналы в одном месте.</p>
         <div class="settings-list">
           <div><span>Telegram</span><strong>@atRasylon_bot</strong></div>
           <div><span>Компания</span><strong>Rasylon Logistics</strong></div>
         </div>
-        <button class="primary-button wide" data-screen-target="profile">Войти по номеру</button>
+        <button class="primary-button wide" data-screen-target="login">Войти по номеру</button>
       </div>
     </section>
   </main>
@@ -364,7 +375,12 @@ function setStatus(element: HTMLElement, message: string, ok = false): void {
 }
 
 function setScreen(screen: string): void {
+  const protectedScreens = ["dashboard", "locations", "messages", "profile"];
+  if (!isAuthenticated && protectedScreens.includes(screen)) {
+    screen = "login";
+  }
   activeScreen = screen;
+  document.body.classList.toggle("is-authenticated", isAuthenticated);
   document.querySelectorAll<HTMLElement>(".screen").forEach((element) => {
     element.classList.toggle("active", element.dataset.screen === screen);
   });
@@ -539,10 +555,12 @@ async function verifyOtp(event: SubmitEvent): Promise<void> {
   try {
     const phone = byId<HTMLInputElement>("authPhone").value;
     await postJson("/api/auth/verify-otp", { phone, otp: byId<HTMLInputElement>("authOtp").value });
+    isAuthenticated = true;
     byId("phoneValue").textContent = phone;
     byId("profileMeta").textContent = "Telegram подтвержден";
     tg?.HapticFeedback?.notificationOccurred("success");
     setStatus(status, "Вход выполнен.", true);
+    setScreen("dashboard");
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     setStatus(status, code === "otp_expired" ? "OTP истек. Запросите новый код." : code === "too_many_attempts" ? "Слишком много попыток. Попробуйте позже." : "Неверный OTP.");
@@ -636,8 +654,10 @@ byId<HTMLButtonElement>("openBot").addEventListener("click", () => {
   tg ? tg.openTelegramLink(url) : window.location.assign(url);
 });
 byId<HTMLButtonElement>("logoutButton").addEventListener("click", () => {
+  isAuthenticated = false;
   byId("profileMeta").textContent = "Telegram не привязан";
   byId("phoneValue").textContent = "не указан";
+  setScreen("card");
 });
 document.querySelector<HTMLElement>('[data-action="support"]')?.addEventListener("click", () => {
   const support = (config?.bot.support || "@rasylon_support").replace("@", "");
