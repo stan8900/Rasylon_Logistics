@@ -28,6 +28,19 @@ PaymentCreatedCallback = Callable[[int, str], Awaitable[None]]
 OrderCreatedCallback = Callable[[Dict[str, Any]], Awaitable[None]]
 
 
+@web.middleware
+async def cors_middleware(request: web.Request, handler: Callable[[web.Request], Awaitable[web.StreamResponse]]) -> web.StreamResponse:
+    if request.method == "OPTIONS":
+        response = web.Response(status=204)
+    else:
+        response = await handler(request)
+    response.headers["Access-Control-Allow-Origin"] = os.getenv("CORS_ALLOW_ORIGIN", "*")
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Max-Age"] = "86400"
+    return response
+
+
 def money(amount: int) -> str:
     return f"{amount:,}".replace(",", " ") + f" {PAYMENT_CURRENCY}"
 
@@ -222,7 +235,7 @@ def create_app(
     payment_created_callback: Optional[PaymentCreatedCallback] = None,
     order_created_callback: Optional[OrderCreatedCallback] = None,
 ) -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
     app["storage"] = storage or create_storage_from_env()
     app["payment_created_callback"] = payment_created_callback
     app["order_created_callback"] = order_created_callback
