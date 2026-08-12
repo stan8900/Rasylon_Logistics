@@ -126,6 +126,8 @@ class AutoSender:
                 await self._disable_shared_user_sender()
                 raise
             return
+        if self._bot.get("personal_session"):
+            raise RuntimeError("Общий номер рассылки недоступен. Проверьте TG_USER_SESSION и TG_USER_PROXY.")
         await self._bot.send_message(chat_id, message)
 
     async def _start_task_for_user(self, user_id: int) -> None:
@@ -304,6 +306,8 @@ class AutoSender:
             if selected:
                 return [chat_id for chat_id in selected if chat_id in available_ids]
             return list(personal_chats.keys())
+        if self._bot.get("personal_session"):
+            return []
         return list(auto.get("target_chat_ids") or [])
 
     async def _disable_shared_user_sender(self) -> None:

@@ -535,6 +535,14 @@ async def should_require_targets(bot_obj: Bot, user_id: int) -> bool:
     return not auto.get("sender_account_id")
 
 
+def shared_sender_configured(bot_obj: Bot) -> bool:
+    return bool(bot_obj.get("personal_session"))
+
+
+def shared_sender_unavailable(bot_obj: Bot) -> bool:
+    return shared_sender_configured(bot_obj) and not bot_obj.get("user_sender")
+
+
 async def get_active_sender_account_id(user_id: int) -> Optional[int]:
     auto = await storage.get_auto(user_id)
     account_id = auto.get("sender_account_id")
@@ -1087,9 +1095,11 @@ async def show_auto_menu(message: types.Message, auto_data: dict, *, user_id: in
             )
     else:
         sender_line = (
-            "Номер для рассылки: бот"
-            if not personal_api_available
-            else "Номер для рассылки: бот (можно выбрать личный номер)"
+            "Номер для рассылки: общий номер недоступен"
+            if shared_sender_unavailable(message.bot)
+            else "Номер для рассылки: общий номер"
+            if shared_sender_configured(message.bot)
+            else "Номер для рассылки: бот"
         )
         group_line = f"Выбрано групп: {len(targets)}"
     system_payment_valid = await storage.has_recent_payment(within_days=PAYMENT_VALID_DAYS)
@@ -1144,9 +1154,7 @@ async def show_account_menu(message: types.Message, *, user_id: int) -> None:
     auto_data = await storage.get_auto(user_id)
     active_account_id = auto_data.get("sender_account_id")
     allow_bot_sender = True
-    bot_label = "Отправлять от бота"
-    if message.bot.get("user_sender"):
-        bot_label = "Отправлять от общего аккаунта"
+    bot_label = "Отправлять от общего номера"
     lines = [
         "📱 <b>Номера для рассылки</b>",
         "Выберите аккаунт, с которого будет идти авторассылка.",
@@ -1219,7 +1227,7 @@ async def cb_accounts_set(call: types.CallbackQuery) -> None:
     user_id = call.from_user.id
     if target == "bot":
         await storage.set_user_sender_account(user_id, None)
-        await call.answer("Рассылка будет идти от бота.", show_alert=True)
+        await call.answer("Рассылка будет идти от общего номера.", show_alert=True)
     else:
         try:
             account_id = int(target)
@@ -2766,6 +2774,12 @@ async def cb_auto_start(call: types.CallbackQuery) -> None:
         return
     selected_targets = auto.get("target_chat_ids") or []
     selected_account_id = auto.get("sender_account_id")
+    if selected_account_id is None and shared_sender_unavailable(call.bot):
+        await call.message.answer(
+            "Общий номер рассылки сейчас недоступен. Проверьте TG_USER_SESSION и TG_USER_PROXY, "
+            "затем перезапустите рассылку."
+        )
+        return
     if selected_account_id is not None:
         known = await storage.list_known_chats(account_id=selected_account_id, owner_id=call.from_user.id)
         if not known:
