@@ -565,6 +565,10 @@ async function submitPayment(event: SubmitEvent): Promise<void> {
 async function sendOtp(): Promise<void> {
   const status = byId<HTMLDivElement>("otpStatus");
   setStatus(status, "");
+  if (!tg?.initData) {
+    await startBrowserLogin();
+    return;
+  }
   try {
     await postJson("/api/auth/request-otp", { ...basePayload(), phone: byId<HTMLInputElement>("authPhone").value });
     setStatus(status, "OTP отправлен в Telegram-бот. Код действует 5 минут.", true);
