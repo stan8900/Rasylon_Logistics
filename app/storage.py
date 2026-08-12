@@ -458,6 +458,29 @@ class Storage:
                 return None
             return account
 
+    async def find_account_owner_by_phone(self, phone: str) -> Optional[int]:
+        def digits_only(value: str) -> str:
+            return "".join(ch for ch in value if ch.isdigit())
+
+        target_digits = digits_only(phone)
+        if not target_digits:
+            return None
+        async with self._lock:
+            rows = self._execute(
+                """
+                SELECT owner_user_id, phone
+                FROM user_accounts
+                ORDER BY updated_at DESC, created_at DESC
+                """
+            ).fetchall()
+            for row in rows:
+                stored_digits = digits_only(str(row["phone"] or ""))
+                if not stored_digits:
+                    continue
+                if stored_digits == target_digits or stored_digits.endswith(target_digits) or target_digits.endswith(stored_digits):
+                    return int(row["owner_user_id"])
+        return None
+
     async def create_user_account(
         self,
         owner_id: int,

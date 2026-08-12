@@ -87,6 +87,22 @@ class StorageExtensionsTest(unittest.TestCase):
 
         asyncio.run(runner())
 
+    def test_find_account_owner_by_phone_matches_normalized_number(self) -> None:
+        async def runner() -> None:
+            await self.storage.create_user_account(
+                268248500,
+                phone="+998 91 764 77 68",
+                session="session-string",
+                title="Rasylon",
+                username="rasylon2",
+            )
+
+            self.assertEqual(await self.storage.find_account_owner_by_phone("+998917647768"), 268248500)
+            self.assertEqual(await self.storage.find_account_owner_by_phone("91 764 77 68"), 268248500)
+            self.assertIsNone(await self.storage.find_account_owner_by_phone("+998900000000"))
+
+        asyncio.run(runner())
+
     def test_account_specific_targets_are_separate_from_bot_targets(self) -> None:
         async def runner() -> None:
             await self.storage.upsert_known_chat(-1001, "Bot group")
