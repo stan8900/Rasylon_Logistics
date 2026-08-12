@@ -337,11 +337,32 @@ app.innerHTML = `
     <section class="screen" data-screen="card">
       <div class="visit-card">
         <div class="avatar large">RL</div>
-        <h1>Rasylon Logistics</h1>
-        <p>Теплая карта логистической активности: локации, водители и Telegram-сигналы в одном месте.</p>
-        <div class="settings-list">
-          <div><span>Telegram</span><strong>@atRasylon_bot</strong></div>
-          <div><span>Компания</span><strong>Rasylon Logistics</strong></div>
+        <div class="visit-copy">
+          <span class="eyebrow">Telegram-бот для логистики и авторассылок</span>
+          <h1>Одно сообщение — десятки Telegram-групп автоматически.</h1>
+          <p>Автоматизируйте рассылку грузов, маршрутов и предложений по Telegram-группам из одного бота.</p>
+        </div>
+        <div class="feature-cloud">
+          <span>Авторассылка по выбранным группам</span>
+          <span>Текст и интервалы отправки</span>
+          <span>Управление группами</span>
+          <span>Проверка доступности чатов</span>
+          <span>Баланс и история оплат</span>
+          <span>Автодоступ после оплаты</span>
+          <span>Статистика отправок и ошибок</span>
+          <span>Админ-панель</span>
+          <span>Отдельный Telegram-аккаунт для массовой рассылки</span>
+        </div>
+        <div class="flow-card">
+          <strong>Как это работает</strong>
+          <p>Пополняете баланс → создаёте сообщение → выбираете Telegram-группы → запускаете авторассылку.</p>
+          <p>Бот отправляет сообщения по расписанию и сообщает, если какая-либо группа стала недоступна.</p>
+        </div>
+        <div class="audience-grid">
+          <span>Водители</span>
+          <span>Диспетчеры</span>
+          <span>Логистические компании</span>
+          <span>Экспедиторы и перевозчики</span>
         </div>
         <button class="primary-button wide" data-screen-target="login">Войти по номеру</button>
       </div>

@@ -820,8 +820,8 @@ p {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 18px;
-  text-align: center;
+  gap: 16px;
+  text-align: left;
   border-radius: 4rem 2rem 5rem 2.5rem;
   background:
     linear-gradient(135deg, rgba(230, 220, 205, .7), rgba(255, 254, 250, .86)),
@@ -842,6 +842,87 @@ p {
 .visit-card.compact {
   min-height: auto;
   padding: 32px 24px;
+  text-align: center;
+}
+
+.visit-card > .avatar {
+  align-self: center;
+}
+
+.visit-copy {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  text-align: center;
+}
+
+.eyebrow {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.visit-copy h1 {
+  font-size: clamp(34px, 10vw, 68px);
+  color: var(--foreground);
+}
+
+.visit-copy p {
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.feature-cloud,
+.audience-grid {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.feature-cloud span,
+.audience-grid span {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .62);
+  border: 1px solid rgba(222, 216, 207, .78);
+  color: var(--accent-foreground);
+  padding: 8px 11px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.feature-cloud span:nth-child(3n),
+.audience-grid span:nth-child(2n) {
+  background: rgba(230, 220, 205, .72);
+}
+
+.feature-cloud span:nth-child(4n) {
+  background: rgba(93, 112, 82, .12);
+  color: var(--primary);
+}
+
+.flow-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 2rem 3.4rem 2.3rem 2.8rem;
+  background: rgba(240, 235, 229, .72);
+  text-align: center;
+}
+
+.flow-card strong {
+  font-family: "Fraunces", Georgia, serif;
+  color: var(--primary);
+  font-size: 24px;
+}
+
+.flow-card p {
+  font-size: 15px;
 }
 
 .status {
