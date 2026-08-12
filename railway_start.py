@@ -14,11 +14,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+async def send_otp_to_telegram(phone: str, otp: str) -> None:
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if not digits:
+        raise ValueError("phone_required")
+    user_id = int(digits[-15:])
+    await bot_module.bot.send_message(
+        user_id,
+        f"Ваш OTP для входа в Rasylon Logistics: {otp}\nКод действует 5 минут.",
+    )
+
+
 async def run_web(stop_event: asyncio.Event) -> web.AppRunner:
     app = create_app(
         storage=bot_module.storage,
         payment_created_callback=bot_module.notify_admins_about_payment,
         order_created_callback=bot_module.notify_admins_about_mini_order,
+        otp_sender_callback=send_otp_to_telegram,
     )
     runner = web.AppRunner(app)
     await runner.setup()

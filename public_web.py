@@ -3,6 +3,8 @@ import hmac
 import json
 import logging
 import os
+import secrets
+from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import parse_qsl
 
@@ -26,6 +28,11 @@ SUPPORT_AGENT_USERNAME = os.getenv("SUPPORT_AGENT_USERNAME", "@rasylon_support")
 ADMIN_REDIRECT_URL = os.getenv("ADMIN_REDIRECT_URL", "https://rasylon-support-production.up.railway.app/")
 PaymentCreatedCallback = Callable[[int, str], Awaitable[None]]
 OrderCreatedCallback = Callable[[Dict[str, Any]], Awaitable[None]]
+OtpSenderCallback = Callable[[str, str], Awaitable[None]]
+OTP_TTL_SECONDS = int(os.getenv("OTP_TTL_SECONDS", "300"))
+OTP_RESEND_SECONDS = int(os.getenv("OTP_RESEND_SECONDS", "60"))
+OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+OTP_STORE: Dict[str, Dict[str, Any]] = {}
 
 
 @web.middleware
@@ -69,6 +76,110 @@ def fallback_user_id(phone: str) -> int:
     if not digits:
         raise ValueError("phone_required")
     return int(digits[-15:])
+
+
+def now_utc() -> datetime:
+    return datetime.utcnow()
+
+
+def public_locations_payload() -> Dict[str, Any]:
+    return {
+        "locations": [
+            {
+                "id": "tashkent",
+                "name": "Ташкент",
+                "country": "Узбекистан",
+                "lat": 41.31,
+                "lon": 69.28,
+                "drivers": 18,
+                "messages": 42,
+                "updated_at": "2 мин назад",
+                "trend": [8, 11, 13, 16, 18],
+                "subscribed": True,
+                "favorite": True,
+            },
+            {
+                "id": "samarkand",
+                "name": "Самарканд",
+                "country": "Узбекистан",
+                "lat": 39.65,
+                "lon": 66.96,
+                "drivers": 9,
+                "messages": 21,
+                "updated_at": "8 мин назад",
+                "trend": [4, 6, 5, 8, 9],
+                "subscribed": False,
+                "favorite": True,
+            },
+            {
+                "id": "almaty",
+                "name": "Алматы",
+                "country": "Казахстан",
+                "lat": 43.24,
+                "lon": 76.9,
+                "drivers": 14,
+                "messages": 37,
+                "updated_at": "5 мин назад",
+                "trend": [10, 9, 12, 13, 14],
+                "subscribed": True,
+                "favorite": False,
+            },
+            {
+                "id": "bishkek",
+                "name": "Бишкек",
+                "country": "Кыргызстан",
+                "lat": 42.87,
+                "lon": 74.59,
+                "drivers": 7,
+                "messages": 16,
+                "updated_at": "14 мин назад",
+                "trend": [2, 3, 5, 7, 7],
+                "subscribed": False,
+                "favorite": False,
+            },
+        ],
+        "activities": [
+            {
+                "id": "a1",
+                "driver": "Rasul",
+                "username": "@rasul_tir",
+                "location": "Ташкент",
+                "destination": "Алматы",
+                "vehicle_type": "фура тент",
+                "availability": "сегодня",
+                "confidence": 0.94,
+                "source": "gruz_uz",
+                "minutes_ago": 2,
+                "message": "Стою Ташкент, фура тент, ищу груз на Алматы, готов сегодня",
+            },
+            {
+                "id": "a2",
+                "driver": "Aziz",
+                "username": "@aziz_ref",
+                "location": "Самарканд",
+                "destination": "Ташкент",
+                "vehicle_type": "рефрижератор",
+                "availability": "утром",
+                "confidence": 0.89,
+                "source": "gruzoperevozky_sng",
+                "minutes_ago": 8,
+                "message": "Самарканд, реф, свободен, ищу загрузку на завтра",
+            },
+            {
+                "id": "a3",
+                "driver": "Bek",
+                "username": "@bek_log",
+                "location": "Алматы",
+                "destination": "Ташкент",
+                "vehicle_type": "изотерм",
+                "availability": "сейчас",
+                "confidence": 0.91,
+                "source": "logistics_kazakhstan",
+                "minutes_ago": 11,
+                "message": "Алматы стою, изотерм, направление Ташкент/Шымкент",
+            },
+        ],
+    }
 
 
 def verify_telegram_init_data(init_data: str) -> Optional[Dict[str, Any]]:
@@ -122,6 +233,77 @@ async def config_api(request: web.Request) -> web.Response:
             },
         }
     )
+
+
+async def locations_api(request: web.Request) -> web.Response:
+    return web.json_response(public_locations_payload())
+
+
+async def request_otp_api(request: web.Request) -> web.Response:
+    data = await request.json()
+    phone = normalize_phone(str(data.get("phone") or ""))
+    if not phone:
+        return web.json_response({"error": "phone_required"}, status=400)
+
+    record = OTP_STORE.get(phone)
+    current_time = now_utc()
+    if record and record.get("last_sent_at"):
+        elapsed = (current_time - record["last_sent_at"]).total_seconds()
+        if elapsed < OTP_RESEND_SECONDS:
+            return web.json_response({"error": "rate_limited", "retry_after": int(OTP_RESEND_SECONDS - elapsed)}, status=429)
+
+    otp = f"{secrets.randbelow(1_000_000):06d}"
+    OTP_STORE[phone] = {
+        "otp_hash": hashlib.sha256(otp.encode()).hexdigest(),
+        "expires_at": current_time + timedelta(seconds=OTP_TTL_SECONDS),
+        "last_sent_at": current_time,
+        "attempts": 0,
+    }
+
+    sender: Optional[OtpSenderCallback] = request.app.get("otp_sender_callback")
+    if sender:
+        try:
+            await sender(phone, otp)
+        except Exception:
+            logger.exception("Failed to send OTP to Telegram user.")
+            OTP_STORE.pop(phone, None)
+            return web.json_response(
+                {
+                    "error": "telegram_not_linked",
+                    "bot_url": f"https://t.me/{BOT_USERNAME}" if BOT_USERNAME else None,
+                },
+                status=404,
+            )
+    else:
+        logger.info("OTP generated for %s; no sender callback is configured.", phone)
+
+    return web.json_response({"ok": True, "expires_in": OTP_TTL_SECONDS})
+
+
+async def verify_otp_api(request: web.Request) -> web.Response:
+    data = await request.json()
+    phone = normalize_phone(str(data.get("phone") or ""))
+    otp = "".join(ch for ch in str(data.get("otp") or "") if ch.isdigit())
+    if not phone or not otp:
+        return web.json_response({"error": "otp_required"}, status=400)
+
+    record = OTP_STORE.get(phone)
+    if not record:
+        return web.json_response({"error": "otp_expired"}, status=400)
+    if now_utc() > record["expires_at"]:
+        OTP_STORE.pop(phone, None)
+        return web.json_response({"error": "otp_expired"}, status=400)
+    if int(record.get("attempts") or 0) >= OTP_MAX_ATTEMPTS:
+        return web.json_response({"error": "too_many_attempts"}, status=429)
+
+    record["attempts"] = int(record.get("attempts") or 0) + 1
+    expected = str(record["otp_hash"])
+    received = hashlib.sha256(otp.encode()).hexdigest()
+    if not hmac.compare_digest(expected, received):
+        return web.json_response({"error": "bad_otp", "attempts_left": OTP_MAX_ATTEMPTS - record["attempts"]}, status=403)
+
+    OTP_STORE.pop(phone, None)
+    return web.json_response({"ok": True, "phone": phone})
 
 
 async def admin_login_api(request: web.Request) -> web.Response:
@@ -234,16 +416,21 @@ def create_app(
     *,
     payment_created_callback: Optional[PaymentCreatedCallback] = None,
     order_created_callback: Optional[OrderCreatedCallback] = None,
+    otp_sender_callback: Optional[OtpSenderCallback] = None,
 ) -> web.Application:
     app = web.Application(middlewares=[cors_middleware])
     app["storage"] = storage or create_storage_from_env()
     app["payment_created_callback"] = payment_created_callback
     app["order_created_callback"] = order_created_callback
+    app["otp_sender_callback"] = otp_sender_callback
     app.router.add_get("/health", health)
     app.router.add_get("/assets/telegram.lottie", telegram_lottie)
     app.router.add_get("/", index)
     app.router.add_get("/app", index)
     app.router.add_get("/api/mini/config", config_api)
+    app.router.add_get("/api/mini/locations", locations_api)
+    app.router.add_post("/api/auth/request-otp", request_otp_api)
+    app.router.add_post("/api/auth/verify-otp", verify_otp_api)
     app.router.add_post("/api/mini/admin-login", admin_login_api)
     app.router.add_post("/api/mini/payment", payment_api)
     app.router.add_post("/api/mini/order", order_api)
