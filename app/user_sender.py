@@ -62,6 +62,7 @@ class UserSender:
             connection_retries=2,
             request_retries=2,
             timeout=10,
+            receive_updates=False,
         )
         self._start_lock = asyncio.Lock()
         self._started = False
