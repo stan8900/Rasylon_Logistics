@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import secrets
+import base64
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import parse_qsl
@@ -42,6 +43,8 @@ BROWSER_LOGIN_TTL_SECONDS = int(os.getenv("BROWSER_LOGIN_TTL_SECONDS", "300"))
 BROWSER_LOGIN_STORE: Dict[str, Dict[str, Any]] = {}
 AUTH_SESSION_TTL_SECONDS = int(os.getenv("AUTH_SESSION_TTL_SECONDS", "604800"))
 AUTH_SESSION_STORE: Dict[str, Dict[str, Any]] = {}
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "rasylon_auth_token")
+AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "true").lower() not in {"0", "false", "no"}
 KNOWN_LOCATION_ALIASES = {
     "таш": "Ташкент",
     "tash": "Ташкент",
@@ -74,9 +77,12 @@ async def cors_middleware(request: web.Request, handler: Callable[[web.Request],
         response = web.Response(status=204)
     else:
         response = await handler(request)
-    response.headers["Access-Control-Allow-Origin"] = os.getenv("CORS_ALLOW_ORIGIN", "*")
+    allowed_origin = os.getenv("CORS_ALLOW_ORIGIN", "*")
+    response.headers["Access-Control-Allow-Origin"] = allowed_origin
     response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    if allowed_origin != "*":
+        response.headers["Access-Control-Allow-Credentials"] = "true"
     response.headers["Access-Control-Max-Age"] = "86400"
     return response
 
@@ -143,12 +149,51 @@ def confirm_browser_login(token: str, telegram_user: Dict[str, Any]) -> bool:
     return True
 
 
+def auth_secret() -> Optional[bytes]:
+    raw = os.getenv("AUTH_SESSION_SECRET") or os.getenv("BOT_TOKEN")
+    return raw.encode() if raw else None
+
+
+def b64encode_json(payload: Dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def b64decode_json(value: str) -> Optional[Dict[str, Any]]:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode())
+        decoded = json.loads(raw.decode())
+    except (ValueError, json.JSONDecodeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def sign_auth_payload(payload_part: str) -> Optional[str]:
+    secret = auth_secret()
+    if not secret:
+        return None
+    digest = hmac.new(secret, payload_part.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
 def create_auth_session(telegram_user: Dict[str, Any]) -> str:
-    token = secrets.token_urlsafe(32)
+    expires_at = now_utc() + timedelta(seconds=AUTH_SESSION_TTL_SECONDS)
+    payload = {
+        "v": 1,
+        "exp": int(expires_at.timestamp()),
+        "telegram_user": telegram_user,
+    }
+    payload_part = b64encode_json(payload)
+    signature = sign_auth_payload(payload_part)
+    if not signature:
+        token = secrets.token_urlsafe(32)
+    else:
+        token = f"{payload_part}.{signature}"
     AUTH_SESSION_STORE[token] = {
         "telegram_user": telegram_user,
         "created_at": now_utc(),
-        "expires_at": now_utc() + timedelta(seconds=AUTH_SESSION_TTL_SECONDS),
+        "expires_at": expires_at,
     }
     return token
 
@@ -156,16 +201,35 @@ def create_auth_session(telegram_user: Dict[str, Any]) -> str:
 def auth_user_from_token(token: str) -> Optional[Dict[str, Any]]:
     prune_browser_logins()
     record = AUTH_SESSION_STORE.get(token)
-    if not record:
+    if record:
+        return record.get("telegram_user")
+    parts = token.split(".")
+    if len(parts) != 2:
         return None
-    return record.get("telegram_user")
+    payload_part, received_sig = parts
+    expected_sig = sign_auth_payload(payload_part)
+    if not expected_sig or not hmac.compare_digest(received_sig, expected_sig):
+        return None
+    payload = b64decode_json(payload_part)
+    if not payload:
+        return None
+    try:
+        expires_at = int(payload.get("exp") or 0)
+    except (TypeError, ValueError):
+        return None
+    if int(now_utc().timestamp()) > expires_at:
+        return None
+    telegram_user = payload.get("telegram_user")
+    return telegram_user if isinstance(telegram_user, dict) else None
 
 
-def resolve_authenticated_user(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def resolve_authenticated_user(data: Dict[str, Any], request: Optional[web.Request] = None) -> Optional[Dict[str, Any]]:
     telegram_user = verify_telegram_init_data(str(data.get("tg_init_data") or ""))
     if telegram_user:
         return telegram_user
     auth_token = str(data.get("auth_token") or "")
+    if not auth_token and request is not None:
+        auth_token = request.cookies.get(AUTH_COOKIE_NAME, "")
     if auth_token:
         return auth_user_from_token(auth_token)
     return None
@@ -379,7 +443,7 @@ async def locations_api(request: web.Request) -> web.Response:
 
 async def signals_api(request: web.Request) -> web.Response:
     data = await request.json()
-    telegram_user = resolve_authenticated_user(data)
+    telegram_user = resolve_authenticated_user(data, request)
     user_id = None
     if telegram_user:
         try:
@@ -408,7 +472,7 @@ async def classify_message_api(request: web.Request) -> web.Response:
 
 async def mailing_start_api(request: web.Request) -> web.Response:
     data = await request.json()
-    telegram_user = resolve_authenticated_user(data)
+    telegram_user = resolve_authenticated_user(data, request)
     user_id = None
     if telegram_user:
         try:
@@ -441,7 +505,7 @@ async def mailing_start_api(request: web.Request) -> web.Response:
 
 async def mailing_status_api(request: web.Request) -> web.Response:
     data = await request.json()
-    telegram_user = resolve_authenticated_user(data)
+    telegram_user = resolve_authenticated_user(data, request)
     user_id = None
     if telegram_user:
         try:
@@ -470,7 +534,7 @@ async def mailing_status_api(request: web.Request) -> web.Response:
 
 async def mailing_stop_api(request: web.Request) -> web.Response:
     data = await request.json()
-    telegram_user = resolve_authenticated_user(data)
+    telegram_user = resolve_authenticated_user(data, request)
     user_id = None
     if telegram_user:
         try:
@@ -490,7 +554,7 @@ async def mailing_stop_api(request: web.Request) -> web.Response:
 
 async def mailing_select_all_api(request: web.Request) -> web.Response:
     data = await request.json()
-    telegram_user = resolve_authenticated_user(data)
+    telegram_user = resolve_authenticated_user(data, request)
     user_id = None
     if telegram_user:
         try:
@@ -543,13 +607,30 @@ async def browser_login_check_api(request: web.Request) -> web.Response:
     if not confirmed_user:
         return web.json_response({"status": "pending"})
     BROWSER_LOGIN_STORE.pop(token, None)
-    return web.json_response(
+    auth_token = create_auth_session(confirmed_user)
+    response = web.json_response(
         {
             "status": "confirmed",
             "telegram_user": confirmed_user,
-            "auth_token": create_auth_session(confirmed_user),
+            "auth_token": auth_token,
         }
     )
+    response.set_cookie(
+        AUTH_COOKIE_NAME,
+        auth_token,
+        max_age=AUTH_SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite="None" if AUTH_COOKIE_SECURE else "Lax",
+        path="/",
+    )
+    return response
+
+
+async def logout_api(request: web.Request) -> web.Response:
+    response = web.json_response({"ok": True})
+    response.del_cookie(AUTH_COOKIE_NAME, path="/")
+    return response
 
 
 async def request_otp_api(request: web.Request) -> web.Response:
@@ -767,6 +848,7 @@ def create_app(
     app.router.add_post("/api/mini/mailing/select-all", mailing_select_all_api)
     app.router.add_post("/api/auth/browser-login/start", browser_login_start_api)
     app.router.add_get("/api/auth/browser-login/check", browser_login_check_api)
+    app.router.add_post("/api/auth/logout", logout_api)
     app.router.add_post("/api/auth/request-otp", request_otp_api)
     app.router.add_post("/api/auth/verify-otp", verify_otp_api)
     app.router.add_post("/api/mini/admin-login", admin_login_api)

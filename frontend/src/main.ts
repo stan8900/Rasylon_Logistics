@@ -362,6 +362,7 @@ async function postJson<T>(path: string, payload: Record<string, unknown>): Prom
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(payload),
   });
   const data = await response.json();
@@ -707,7 +708,9 @@ async function startBrowserLogin(): Promise<void> {
 async function checkBrowserLogin(): Promise<void> {
   if (!browserLoginToken) return;
   try {
-    const response = await fetch(`${API_BASE}/api/auth/browser-login/check?token=${encodeURIComponent(browserLoginToken)}`);
+    const response = await fetch(`${API_BASE}/api/auth/browser-login/check?token=${encodeURIComponent(browserLoginToken)}`, {
+      credentials: "include",
+    });
     const data = await response.json() as { status?: string; telegram_user?: TelegramUser; auth_token?: string };
     if (data.status === "confirmed") {
       if (browserLoginPoll !== null) window.clearInterval(browserLoginPoll);
@@ -830,6 +833,7 @@ byId<HTMLButtonElement>("openBot").addEventListener("click", () => {
   tg ? tg.openTelegramLink(url) : window.location.assign(url);
 });
 byId<HTMLButtonElement>("logoutButton").addEventListener("click", () => {
+  void postJson("/api/auth/logout", basePayload()).catch(() => undefined);
   isAuthenticated = false;
   authToken = null;
   window.localStorage.removeItem("rasylon_auth_token");

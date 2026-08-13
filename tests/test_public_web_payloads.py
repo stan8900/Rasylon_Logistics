@@ -1,6 +1,17 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from public_web import build_locations_payload, classify_message_locally, public_locations_payload
+from public_web import (
+    AUTH_COOKIE_NAME,
+    AUTH_SESSION_STORE,
+    auth_user_from_token,
+    build_locations_payload,
+    classify_message_locally,
+    create_auth_session,
+    public_locations_payload,
+    resolve_authenticated_user,
+)
 
 
 class PublicWebPayloadTest(unittest.TestCase):
@@ -9,6 +20,31 @@ class PublicWebPayloadTest(unittest.TestCase):
 
         self.assertEqual(payload["locations"], [])
         self.assertEqual(payload["activities"], [])
+
+    def test_signed_auth_token_survives_memory_store_reset(self) -> None:
+        user = {"id": 268248500, "username": "rasylon"}
+        with patch.dict("os.environ", {"AUTH_SESSION_SECRET": "unit-test-secret"}, clear=False):
+            token = create_auth_session(user)
+            AUTH_SESSION_STORE.clear()
+
+            self.assertEqual(auth_user_from_token(token), user)
+
+    def test_signed_auth_token_rejects_tampering(self) -> None:
+        user = {"id": 268248500, "username": "rasylon"}
+        with patch.dict("os.environ", {"AUTH_SESSION_SECRET": "unit-test-secret"}, clear=False):
+            token = create_auth_session(user)
+            tampered = token[:-1] + ("a" if token[-1] != "a" else "b")
+
+            self.assertIsNone(auth_user_from_token(tampered))
+
+    def test_resolve_authenticated_user_reads_cookie_token(self) -> None:
+        user = {"id": 268248500, "username": "rasylon"}
+        with patch.dict("os.environ", {"AUTH_SESSION_SECRET": "unit-test-secret"}, clear=False):
+            token = create_auth_session(user)
+            AUTH_SESSION_STORE.clear()
+            request = SimpleNamespace(cookies={AUTH_COOKIE_NAME: token})
+
+            self.assertEqual(resolve_authenticated_user({}, request), user)
 
     def test_classification_hides_confidence_and_detects_cargo_requests(self) -> None:
         classification = classify_message_locally("Ташкент, нужен водитель на Алматы, тент сегодня")
