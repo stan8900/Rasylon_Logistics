@@ -190,7 +190,11 @@ def classify_message_locally(message: str) -> Dict[str, Any]:
     lower = text.lower()
     current_location = normalize_location_text(text)
     destination = None
-    direction_match = re.search(r"(?:на|в|до|->|→)\s+([A-Za-zА-Яа-яЁё]+)", text, flags=re.IGNORECASE)
+    direction_match = re.search(
+        r"(?<![A-Za-zА-Яа-яЁё])(?:на|в|до|->|→)\s+([A-Za-zА-Яа-яЁё]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
     if direction_match:
         destination = normalize_location_text(direction_match.group(1)) or direction_match.group(1).title()
     vehicle_type = None
