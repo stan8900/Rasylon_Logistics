@@ -98,6 +98,7 @@ let radiusKm = 120;
 let query = "";
 let locations: LocationSignal[] = [];
 let activities: DriverActivity[] = [];
+let signalsError: string | null = null;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("App root not found");
@@ -449,6 +450,10 @@ function renderActivities(): void {
   const cargoRequests = activities
     .filter((activity) => (activity.intent || "").includes("searching_driver"))
     .sort((left, right) => left.minutes_ago - right.minutes_ago);
+  if (signalsError) {
+    byId("messageList").innerHTML = `<div class="empty">${escapeHtml(signalsError)}</div>`;
+    return;
+  }
   byId("messageList").innerHTML = cargoRequests.map((activity) => `
     <article class="activity-card source">
       <div class="activity-head"><strong>@${escapeHtml(activity.source)}</strong><span>${activity.minutes_ago} мин назад</span></div>
@@ -528,18 +533,31 @@ async function initRealMap(): Promise<void> {
 
 async function loadSignals(): Promise<void> {
   if (!isAuthenticated) {
+    signalsError = null;
     renderAll();
     return;
   }
   try {
-    const data = await postJson<{ locations?: LocationSignal[]; activities?: DriverActivity[] }>("/api/mini/signals", {
+    const data = await postJson<{ locations?: LocationSignal[]; activities?: DriverActivity[]; scope?: string }>("/api/mini/signals", {
       ...basePayload(),
       limit: 100,
     });
+    signalsError = null;
     locations = Array.isArray(data.locations) ? data.locations : [];
     activities = Array.isArray(data.activities) ? data.activities : [];
     if (locations.length && !locations.some((location) => location.id === selectedLocationId)) {
       selectedLocationId = locations[0].id;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "auth_required") {
+      isAuthenticated = false;
+      authToken = null;
+      window.localStorage.removeItem("rasylon_auth_token");
+      signalsError = "Сессия входа истекла. Войдите через Telegram еще раз.";
+      setScreen("login");
+    } else {
+      signalsError = "Не удалось загрузить реальные сообщения. Попробуйте обновить.";
     }
   } finally {
     renderAll();

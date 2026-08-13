@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.storage import Storage
+from public_web import resolve_signal_chat_scope
 
 
 class StorageExtensionsTest(unittest.TestCase):
@@ -181,6 +182,56 @@ class StorageExtensionsTest(unittest.TestCase):
             self.assertEqual(messages[0]["intent"], "cargo_searching_driver")
             self.assertEqual(messages[0]["classification"]["destination"], "Алматы")
             self.assertEqual(await self.storage.list_logistics_messages(chat_ids=[-200]), [])
+
+        asyncio.run(runner())
+
+    def test_signal_scope_uses_selected_groups_first(self) -> None:
+        async def runner() -> None:
+            account = await self.storage.create_user_account(
+                42,
+                phone="+10000000000",
+                session="session-string",
+                title="Test",
+                username="tester",
+            )
+            await self.storage.set_user_sender_account(42, account["id"])
+            await self.storage.replace_account_chats(account["id"], [(-1001, "Account chat"), (-1002, "Other chat")])
+            await self.storage.set_target_chats(42, [-2001], account_id=account["id"])
+
+            scope = await resolve_signal_chat_scope(self.storage, 42)
+
+            self.assertEqual(scope["scope"], "selected_groups")
+            self.assertEqual(scope["chat_ids"], [-2001])
+
+        asyncio.run(runner())
+
+    def test_signal_scope_falls_back_to_sender_account_groups(self) -> None:
+        async def runner() -> None:
+            account = await self.storage.create_user_account(
+                42,
+                phone="+10000000000",
+                session="session-string",
+                title="Test",
+                username="tester",
+            )
+            await self.storage.set_user_sender_account(42, account["id"])
+            await self.storage.replace_account_chats(account["id"], [(-1001, "Account chat"), (-1002, "Other chat")])
+
+            scope = await resolve_signal_chat_scope(self.storage, 42)
+
+            self.assertEqual(scope["scope"], "sender_account_groups")
+            self.assertEqual(scope["chat_ids"], [-1001, -1002])
+
+        asyncio.run(runner())
+
+    def test_signal_scope_does_not_expose_global_chats_without_sender_account(self) -> None:
+        async def runner() -> None:
+            await self.storage.upsert_known_chat(-1001, "Global chat")
+
+            scope = await resolve_signal_chat_scope(self.storage, 42)
+
+            self.assertEqual(scope["scope"], "no_selected_groups")
+            self.assertEqual(scope["chat_ids"], [])
 
         asyncio.run(runner())
 

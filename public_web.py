@@ -384,6 +384,21 @@ def build_locations_payload(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"locations": output_locations, "activities": activities}
 
 
+async def resolve_signal_chat_scope(storage: Any, user_id: int) -> Dict[str, Any]:
+    auto = await storage.get_auto(user_id)
+    target_chat_ids = auto.get("target_chat_ids") or []
+    if target_chat_ids:
+        return {"scope": "selected_groups", "chat_ids": [int(chat_id) for chat_id in target_chat_ids]}
+    account_id = auto.get("sender_account_id")
+    if account_id is None:
+        return {"scope": "no_selected_groups", "chat_ids": []}
+    account_chats = await storage.list_known_chats(account_id=account_id, owner_id=user_id)
+    return {
+        "scope": "sender_account_groups",
+        "chat_ids": [int(chat_id) for chat_id in account_chats.keys()],
+    }
+
+
 def verify_telegram_init_data(init_data: str) -> Optional[Dict[str, Any]]:
     bot_token = os.getenv("BOT_TOKEN")
     if not init_data or not bot_token:
@@ -456,10 +471,9 @@ async def signals_api(request: web.Request) -> web.Response:
         limit = int(data.get("limit") or 100)
     except (TypeError, ValueError):
         limit = 100
-    auto = await request.app["storage"].get_auto(user_id)
-    target_chat_ids = auto.get("target_chat_ids") or []
-    messages = await request.app["storage"].list_logistics_messages(limit=limit, chat_ids=target_chat_ids)
-    return web.json_response({"ok": True, **build_locations_payload(messages)})
+    scope = await resolve_signal_chat_scope(request.app["storage"], user_id)
+    messages = await request.app["storage"].list_logistics_messages(limit=limit, chat_ids=scope["chat_ids"])
+    return web.json_response({"ok": True, "scope": scope["scope"], **build_locations_payload(messages)})
 
 
 async def classify_message_api(request: web.Request) -> web.Response:
