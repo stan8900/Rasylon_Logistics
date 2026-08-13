@@ -526,12 +526,20 @@ async function initRealMap(): Promise<void> {
 }
 
 async function loadSignals(): Promise<void> {
+  if (!isAuthenticated) {
+    renderAll();
+    return;
+  }
   try {
-    const response = await fetch(`${API_BASE}/api/mini/locations`);
-    if (!response.ok) return;
-    const data = await response.json() as { locations?: LocationSignal[]; activities?: DriverActivity[] };
-    if (Array.isArray(data.locations) && data.locations.length) locations = data.locations;
-    if (Array.isArray(data.activities) && data.activities.length) activities = data.activities;
+    const data = await postJson<{ locations?: LocationSignal[]; activities?: DriverActivity[] }>("/api/mini/signals", {
+      ...basePayload(),
+      limit: 100,
+    });
+    locations = Array.isArray(data.locations) ? data.locations : [];
+    activities = Array.isArray(data.activities) ? data.activities : [];
+    if (locations.length && !locations.some((location) => location.id === selectedLocationId)) {
+      selectedLocationId = locations[0].id;
+    }
   } finally {
     renderAll();
   }
@@ -719,6 +727,7 @@ async function checkBrowserLogin(): Promise<void> {
         byId("telegramValue").textContent = userInfo.username ? `@${userInfo.username}` : `ID ${userInfo.id}`;
       }
       setScreen("dashboard");
+      await loadSignals();
       await loadMailingStatus();
       return;
     }
@@ -745,6 +754,7 @@ async function verifyOtp(event: SubmitEvent): Promise<void> {
     tg?.HapticFeedback?.notificationOccurred("success");
     setStatus(status, "Вход выполнен.", true);
     setScreen("dashboard");
+    await loadSignals();
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     setStatus(status, code === "otp_expired" ? "OTP истек. Запросите новый код." : code === "too_many_attempts" ? "Слишком много попыток. Попробуйте позже." : "Неверный OTP.");

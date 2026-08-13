@@ -47,7 +47,7 @@ from app.states import (
     SharedProxyStates,
 )
 from app.user_sender import UserSender, build_telethon_proxy
-from public_web import confirm_browser_login
+from public_web import classify_message_locally, confirm_browser_login
 from telethon import TelegramClient
 from telethon.errors import (
     FloodWaitError,
@@ -3070,6 +3070,31 @@ async def handle_group_text(message: types.Message) -> None:
         types.ChatMemberStatus.MEMBER,
     ):
         await storage.upsert_known_chat(chat.id, title_raw)
+        text = (message.text or "").strip()
+        if not text or (message.from_user and message.from_user.is_bot):
+            return
+        classification = classify_message_locally(text)
+        if classification.get("intent") not in {"cargo_searching_driver", "driver_searching_cargo"}:
+            return
+        author = message.from_user
+        author_name = "Telegram user"
+        if author:
+            author_name = author.full_name or author.username or str(author.id)
+        try:
+            await storage.record_logistics_message(
+                chat_id=chat.id,
+                message_id=message.message_id,
+                chat_title=title_raw,
+                chat_username=chat.username,
+                author_id=author.id if author else None,
+                author_name=author_name,
+                author_username=author.username if author else None,
+                text=text[:4000],
+                classification=classification,
+                created_at=message.date.isoformat() if message.date else None,
+            )
+        except Exception:
+            logger.exception("Не удалось сохранить логистическое сообщение из чата %s.", chat.id)
 
 
 async def on_startup(dispatcher: Dispatcher) -> None:

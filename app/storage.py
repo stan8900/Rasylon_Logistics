@@ -805,6 +805,133 @@ class Storage:
         async with self._lock:
             return self._list_user_account_chats_locked(account_id, owner_id=owner_id)
 
+    async def record_logistics_message(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        chat_title: str,
+        chat_username: Optional[str],
+        author_id: Optional[int],
+        author_name: str,
+        author_username: Optional[str],
+        text: str,
+        classification: Dict[str, Any],
+        created_at: Optional[str] = None,
+    ) -> bool:
+        async with self._lock:
+            now = created_at or datetime.utcnow().isoformat()
+            classification_json = json.dumps(classification, ensure_ascii=False, sort_keys=True)
+            if self._is_postgres:
+                row = self._execute(
+                    """
+                    INSERT INTO logistics_messages (
+                        chat_id, message_id, chat_title, chat_username,
+                        author_id, author_name, author_username, text,
+                        intent, current_location, destination, vehicle_type,
+                        availability, classification_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(chat_id, message_id) DO NOTHING
+                    RETURNING id
+                    """,
+                    (
+                        chat_id,
+                        message_id,
+                        chat_title,
+                        chat_username,
+                        author_id,
+                        author_name,
+                        author_username,
+                        text,
+                        classification.get("intent"),
+                        classification.get("current_location"),
+                        classification.get("destination"),
+                        classification.get("vehicle_type"),
+                        classification.get("availability"),
+                        classification_json,
+                        now,
+                    ),
+                ).fetchone()
+                return row is not None
+            cursor = self._execute(
+                """
+                INSERT OR IGNORE INTO logistics_messages (
+                    chat_id, message_id, chat_title, chat_username,
+                    author_id, author_name, author_username, text,
+                    intent, current_location, destination, vehicle_type,
+                    availability, classification_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chat_id,
+                    message_id,
+                    chat_title,
+                    chat_username,
+                    author_id,
+                    author_name,
+                    author_username,
+                    text,
+                    classification.get("intent"),
+                    classification.get("current_location"),
+                    classification.get("destination"),
+                    classification.get("vehicle_type"),
+                    classification.get("availability"),
+                    classification_json,
+                    now,
+                ),
+            )
+            self._commit()
+            return int(cursor.rowcount or 0) > 0
+
+    async def list_logistics_messages(
+        self,
+        *,
+        limit: int = 100,
+        intent: Optional[str] = None,
+        chat_ids: Optional[Iterable[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        async with self._lock:
+            params: List[Any] = []
+            clauses = []
+            if intent:
+                clauses.append("intent = ?")
+                params.append(intent)
+            if chat_ids is not None:
+                ids = []
+                for chat_id in chat_ids:
+                    try:
+                        ids.append(int(chat_id))
+                    except (TypeError, ValueError):
+                        continue
+                if not ids:
+                    return []
+                placeholders = ", ".join("?" for _ in ids)
+                clauses.append(f"chat_id IN ({placeholders})")
+                params.extend(ids)
+            where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            params.append(max(1, min(500, int(limit))))
+            rows = self._execute(
+                f"""
+                SELECT *
+                FROM logistics_messages
+                {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                try:
+                    item["classification"] = json.loads(item.get("classification_json") or "{}")
+                except json.JSONDecodeError:
+                    item["classification"] = {}
+                result.append(item)
+            return result
+
     async def update_stats(
         self,
         user_id: int,
@@ -1490,6 +1617,66 @@ class Storage:
             """
             CREATE INDEX IF NOT EXISTS idx_user_account_targets_account
             ON user_account_targets(account_id)
+            """
+        )
+        if self._is_postgres:
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS logistics_messages (
+                    id BIGSERIAL PRIMARY KEY,
+                    chat_id BIGINT NOT NULL,
+                    message_id BIGINT NOT NULL,
+                    chat_title TEXT NOT NULL,
+                    chat_username TEXT,
+                    author_id BIGINT,
+                    author_name TEXT,
+                    author_username TEXT,
+                    text TEXT NOT NULL,
+                    intent TEXT NOT NULL,
+                    current_location TEXT,
+                    destination TEXT,
+                    vehicle_type TEXT,
+                    availability TEXT,
+                    classification_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(chat_id, message_id)
+                )
+                """
+            )
+        else:
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS logistics_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id BIGINT NOT NULL,
+                    message_id BIGINT NOT NULL,
+                    chat_title TEXT NOT NULL,
+                    chat_username TEXT,
+                    author_id BIGINT,
+                    author_name TEXT,
+                    author_username TEXT,
+                    text TEXT NOT NULL,
+                    intent TEXT NOT NULL,
+                    current_location TEXT,
+                    destination TEXT,
+                    vehicle_type TEXT,
+                    availability TEXT,
+                    classification_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(chat_id, message_id)
+                )
+                """
+            )
+        self._execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_logistics_messages_intent_created
+            ON logistics_messages(intent, created_at)
+            """
+        )
+        self._execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_logistics_messages_location_created
+            ON logistics_messages(current_location, created_at)
             """
         )
         self._execute(

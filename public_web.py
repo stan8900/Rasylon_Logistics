@@ -59,6 +59,13 @@ KNOWN_LOCATION_ALIASES = {
     "москва": "Москва",
     "moscow": "Москва",
 }
+KNOWN_LOCATION_COORDS = {
+    "Ташкент": {"country": "Узбекистан", "lat": 41.31, "lon": 69.28},
+    "Самарканд": {"country": "Узбекистан", "lat": 39.65, "lon": 66.96},
+    "Алматы": {"country": "Казахстан", "lat": 43.24, "lon": 76.9},
+    "Бишкек": {"country": "Кыргызстан", "lat": 42.87, "lon": 74.59},
+    "Москва": {"country": "Россия", "lat": 55.75, "lon": 37.62},
+}
 
 
 @web.middleware
@@ -221,6 +228,94 @@ def public_locations_payload() -> Dict[str, Any]:
     }
 
 
+def parse_message_datetime(value: Any) -> datetime:
+    if not value:
+        return now_utc()
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return now_utc()
+    if parsed.tzinfo is not None:
+        return parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def minutes_since(value: Any) -> int:
+    delta = now_utc() - parse_message_datetime(value)
+    return max(0, int(delta.total_seconds() // 60))
+
+
+def location_id(location: str) -> str:
+    aliases = {
+        "Ташкент": "tashkent",
+        "Самарканд": "samarkand",
+        "Алматы": "almaty",
+        "Бишкек": "bishkek",
+        "Москва": "moscow",
+    }
+    return aliases.get(location) or re.sub(r"[^a-z0-9]+", "-", location.lower(), flags=re.IGNORECASE).strip("-") or location
+
+
+def build_locations_payload(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    locations: Dict[str, Dict[str, Any]] = {}
+    activities = []
+    for message in messages:
+        location = str(message.get("current_location") or "").strip()
+        if not location:
+            continue
+        coords = KNOWN_LOCATION_COORDS.get(location, {"country": "—", "lat": 41.31, "lon": 69.28})
+        item = locations.setdefault(
+            location,
+            {
+                "id": location_id(location),
+                "name": location,
+                "country": coords["country"],
+                "lat": coords["lat"],
+                "lon": coords["lon"],
+                "drivers": 0,
+                "messages": 0,
+                "updated_at": "только что",
+                "trend": [],
+                "subscribed": False,
+                "favorite": False,
+                "_latest_minutes": None,
+            },
+        )
+        item["messages"] += 1
+        if message.get("intent") == "driver_searching_cargo":
+            item["drivers"] += 1
+        age = minutes_since(message.get("created_at"))
+        if item["_latest_minutes"] is None or age < item["_latest_minutes"]:
+            item["_latest_minutes"] = age
+            item["updated_at"] = "только что" if age < 1 else f"{age} мин назад"
+        author_username = str(message.get("author_username") or "").strip()
+        source = str(message.get("chat_username") or message.get("chat_title") or "telegram").strip()
+        activities.append(
+            {
+                "id": str(message.get("id") or f"{message.get('chat_id')}:{message.get('message_id')}"),
+                "driver": message.get("author_name") or (f"@{author_username}" if author_username else "Telegram user"),
+                "username": f"@{author_username}" if author_username else "",
+                "location": location,
+                "destination": message.get("destination") or "не указано",
+                "vehicle_type": message.get("vehicle_type") or "не указан",
+                "availability": message.get("availability") or "не указано",
+                "intent": message.get("intent") or "unknown",
+                "message": message.get("text") or "",
+                "source": source,
+                "minutes_ago": age,
+            }
+        )
+    output_locations = []
+    for item in locations.values():
+        count = max(1, int(item["messages"]))
+        item["trend"] = [count]
+        item.pop("_latest_minutes", None)
+        output_locations.append(item)
+    output_locations.sort(key=lambda item: (-int(item["messages"]), item["name"]))
+    activities.sort(key=lambda item: int(item["minutes_ago"]))
+    return {"locations": output_locations, "activities": activities}
+
+
 def verify_telegram_init_data(init_data: str) -> Optional[Dict[str, Any]]:
     bot_token = os.getenv("BOT_TOKEN")
     if not init_data or not bot_token:
@@ -276,6 +371,27 @@ async def config_api(request: web.Request) -> web.Response:
 
 async def locations_api(request: web.Request) -> web.Response:
     return web.json_response(public_locations_payload())
+
+
+async def signals_api(request: web.Request) -> web.Response:
+    data = await request.json()
+    telegram_user = resolve_authenticated_user(data)
+    user_id = None
+    if telegram_user:
+        try:
+            user_id = int(telegram_user.get("id"))
+        except (TypeError, ValueError):
+            user_id = None
+    if user_id is None:
+        return web.json_response({"error": "auth_required"}, status=401)
+    try:
+        limit = int(data.get("limit") or 100)
+    except (TypeError, ValueError):
+        limit = 100
+    auto = await request.app["storage"].get_auto(user_id)
+    target_chat_ids = auto.get("target_chat_ids") or []
+    messages = await request.app["storage"].list_logistics_messages(limit=limit, chat_ids=target_chat_ids)
+    return web.json_response({"ok": True, **build_locations_payload(messages)})
 
 
 async def classify_message_api(request: web.Request) -> web.Response:
@@ -639,6 +755,7 @@ def create_app(
     app.router.add_get("/app", index)
     app.router.add_get("/api/mini/config", config_api)
     app.router.add_get("/api/mini/locations", locations_api)
+    app.router.add_post("/api/mini/signals", signals_api)
     app.router.add_post("/api/ai/classify-message", classify_message_api)
     app.router.add_post("/api/mini/mailing/start", mailing_start_api)
     app.router.add_post("/api/mini/mailing/status", mailing_status_api)

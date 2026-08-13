@@ -135,6 +135,55 @@ class StorageExtensionsTest(unittest.TestCase):
 
         asyncio.run(runner())
 
+    def test_record_and_filter_logistics_messages_by_chat(self) -> None:
+        async def runner() -> None:
+            classification = {
+                "intent": "cargo_searching_driver",
+                "current_location": "Ташкент",
+                "destination": "Алматы",
+                "vehicle_type": "тент",
+                "availability": "сегодня",
+                "source": "local_ai",
+                "should_map": True,
+            }
+
+            inserted = await self.storage.record_logistics_message(
+                chat_id=-100,
+                message_id=10,
+                chat_title="Loads",
+                chat_username="loads_chat",
+                author_id=55,
+                author_name="Dispatcher",
+                author_username="dispatcher",
+                text="Ташкент, нужен водитель на Алматы, тент сегодня",
+                classification=classification,
+                created_at="2026-08-13T10:00:00",
+            )
+            duplicate = await self.storage.record_logistics_message(
+                chat_id=-100,
+                message_id=10,
+                chat_title="Loads",
+                chat_username="loads_chat",
+                author_id=55,
+                author_name="Dispatcher",
+                author_username="dispatcher",
+                text="Ташкент, нужен водитель на Алматы, тент сегодня",
+                classification=classification,
+                created_at="2026-08-13T10:00:00",
+            )
+
+            self.assertTrue(inserted)
+            self.assertFalse(duplicate)
+            self.assertEqual(await self.storage.list_logistics_messages(chat_ids=[]), [])
+
+            messages = await self.storage.list_logistics_messages(chat_ids=[-100])
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(messages[0]["intent"], "cargo_searching_driver")
+            self.assertEqual(messages[0]["classification"]["destination"], "Алматы")
+            self.assertEqual(await self.storage.list_logistics_messages(chat_ids=[-200]), [])
+
+        asyncio.run(runner())
+
     def test_disable_all_auto_turns_off_every_user(self) -> None:
         async def runner() -> None:
             await self.storage.set_auto_message(1, "first")
