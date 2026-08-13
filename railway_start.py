@@ -64,6 +64,8 @@ async def run_web(stop_event: asyncio.Event) -> web.AppRunner:
         otp_sender_callback=send_otp_to_telegram,
         mailing_start_callback=bot_module.start_mini_mailing,
         mailing_status_callback=bot_module.get_mini_mailing_status,
+        mailing_stop_callback=bot_module.stop_mini_mailing,
+        mailing_select_all_callback=bot_module.select_all_mini_mailing_groups,
     )
     runner = web.AppRunner(app)
     await runner.setup()

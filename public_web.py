@@ -32,6 +32,8 @@ OrderCreatedCallback = Callable[[Dict[str, Any]], Awaitable[None]]
 OtpSenderCallback = Callable[[str, str, Optional[int]], Awaitable[None]]
 MailingStartCallback = Callable[[int, str, int, Optional[Dict[str, Any]]], Awaitable[Dict[str, Any]]]
 MailingStatusCallback = Callable[[int], Awaitable[Dict[str, Any]]]
+MailingStopCallback = Callable[[int], Awaitable[Dict[str, Any]]]
+MailingSelectAllCallback = Callable[[int], Awaitable[Dict[str, Any]]]
 OTP_TTL_SECONDS = int(os.getenv("OTP_TTL_SECONDS", "300"))
 OTP_RESEND_SECONDS = int(os.getenv("OTP_RESEND_SECONDS", "60"))
 OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
@@ -194,15 +196,12 @@ def classify_message_locally(message: str) -> Dict[str, Any]:
         if candidate in lower:
             availability = candidate
             break
-    intent = "driver_searching_cargo" if any(word in lower for word in ("ищу", "свобод", "стою", "загрузка", "груз")) else "unknown"
-    confidence = 0.9
-    if not current_location:
-        confidence -= 0.35
-    if intent == "unknown":
-        confidence -= 0.25
-    if not vehicle_type:
-        confidence -= 0.1
-    confidence = max(0.1, min(0.98, confidence))
+    if any(phrase in lower for phrase in ("ищу водителя", "ищем водителя", "нужен водитель", "нужна машина", "ищу машину", "ищем машину", "нужен транспорт", "ищу перевозчика")):
+        intent = "cargo_searching_driver"
+    elif any(word in lower for word in ("ищу", "свобод", "стою", "загрузка", "груз")):
+        intent = "driver_searching_cargo"
+    else:
+        intent = "unknown"
     return {
         "intent": intent,
         "current_location": current_location,
@@ -210,109 +209,15 @@ def classify_message_locally(message: str) -> Dict[str, Any]:
         "vehicle_type": vehicle_type,
         "availability": availability,
         "contact": None,
-        "confidence": confidence,
         "source": "local_ai",
-        "should_map": bool(current_location and confidence >= 0.7),
+        "should_map": bool(current_location and intent != "unknown"),
     }
 
 
 def public_locations_payload() -> Dict[str, Any]:
     return {
-        "locations": [
-            {
-                "id": "tashkent",
-                "name": "Ташкент",
-                "country": "Узбекистан",
-                "lat": 41.31,
-                "lon": 69.28,
-                "drivers": 18,
-                "messages": 42,
-                "updated_at": "2 мин назад",
-                "trend": [8, 11, 13, 16, 18],
-                "subscribed": True,
-                "favorite": True,
-            },
-            {
-                "id": "samarkand",
-                "name": "Самарканд",
-                "country": "Узбекистан",
-                "lat": 39.65,
-                "lon": 66.96,
-                "drivers": 9,
-                "messages": 21,
-                "updated_at": "8 мин назад",
-                "trend": [4, 6, 5, 8, 9],
-                "subscribed": False,
-                "favorite": True,
-            },
-            {
-                "id": "almaty",
-                "name": "Алматы",
-                "country": "Казахстан",
-                "lat": 43.24,
-                "lon": 76.9,
-                "drivers": 14,
-                "messages": 37,
-                "updated_at": "5 мин назад",
-                "trend": [10, 9, 12, 13, 14],
-                "subscribed": True,
-                "favorite": False,
-            },
-            {
-                "id": "bishkek",
-                "name": "Бишкек",
-                "country": "Кыргызстан",
-                "lat": 42.87,
-                "lon": 74.59,
-                "drivers": 7,
-                "messages": 16,
-                "updated_at": "14 мин назад",
-                "trend": [2, 3, 5, 7, 7],
-                "subscribed": False,
-                "favorite": False,
-            },
-        ],
-        "activities": [
-            {
-                "id": "a1",
-                "driver": "Rasul",
-                "username": "@rasul_tir",
-                "location": "Ташкент",
-                "destination": "Алматы",
-                "vehicle_type": "фура тент",
-                "availability": "сегодня",
-                "confidence": 0.94,
-                "source": "gruz_uz",
-                "minutes_ago": 2,
-                "message": "Стою Ташкент, фура тент, ищу груз на Алматы, готов сегодня",
-            },
-            {
-                "id": "a2",
-                "driver": "Aziz",
-                "username": "@aziz_ref",
-                "location": "Самарканд",
-                "destination": "Ташкент",
-                "vehicle_type": "рефрижератор",
-                "availability": "утром",
-                "confidence": 0.89,
-                "source": "gruzoperevozky_sng",
-                "minutes_ago": 8,
-                "message": "Самарканд, реф, свободен, ищу загрузку на завтра",
-            },
-            {
-                "id": "a3",
-                "driver": "Bek",
-                "username": "@bek_log",
-                "location": "Алматы",
-                "destination": "Ташкент",
-                "vehicle_type": "изотерм",
-                "availability": "сейчас",
-                "confidence": 0.91,
-                "source": "logistics_kazakhstan",
-                "minutes_ago": 11,
-                "message": "Алматы стою, изотерм, направление Ташкент/Шымкент",
-            },
-        ],
+        "locations": [],
+        "activities": [],
     }
 
 
@@ -441,6 +346,50 @@ async def mailing_status_api(request: web.Request) -> web.Response:
             "reasons": [] if target_count > 0 else ["no_targets"],
         }
     )
+
+
+async def mailing_stop_api(request: web.Request) -> web.Response:
+    data = await request.json()
+    telegram_user = resolve_authenticated_user(data)
+    user_id = None
+    if telegram_user:
+        try:
+            user_id = int(telegram_user.get("id"))
+        except (TypeError, ValueError):
+            user_id = None
+    if user_id is None:
+        return web.json_response({"error": "auth_required"}, status=401)
+    callback: Optional[MailingStopCallback] = request.app.get("mailing_stop_callback")
+    if callback:
+        result = await callback(user_id)
+    else:
+        await request.app["storage"].set_auto_enabled(user_id, False)
+        result = {"stopped": True}
+    return web.json_response({"ok": True, **result})
+
+
+async def mailing_select_all_api(request: web.Request) -> web.Response:
+    data = await request.json()
+    telegram_user = resolve_authenticated_user(data)
+    user_id = None
+    if telegram_user:
+        try:
+            user_id = int(telegram_user.get("id"))
+        except (TypeError, ValueError):
+            user_id = None
+    if user_id is None:
+        return web.json_response({"error": "auth_required"}, status=401)
+    callback: Optional[MailingSelectAllCallback] = request.app.get("mailing_select_all_callback")
+    if callback:
+        result = await callback(user_id)
+    else:
+        auto = await request.app["storage"].get_auto(user_id)
+        account_id = auto.get("sender_account_id")
+        known = await request.app["storage"].list_known_chats(account_id=account_id, owner_id=user_id if account_id is not None else None)
+        chat_ids = [int(chat_id) for chat_id in known.keys()]
+        await request.app["storage"].set_target_chats(user_id, chat_ids, account_id=account_id)
+        result = {"selected_count": len(chat_ids)}
+    return web.json_response({"ok": True, **result})
 
 
 async def browser_login_start_api(request: web.Request) -> web.Response:
@@ -672,6 +621,8 @@ def create_app(
     otp_sender_callback: Optional[OtpSenderCallback] = None,
     mailing_start_callback: Optional[MailingStartCallback] = None,
     mailing_status_callback: Optional[MailingStatusCallback] = None,
+    mailing_stop_callback: Optional[MailingStopCallback] = None,
+    mailing_select_all_callback: Optional[MailingSelectAllCallback] = None,
 ) -> web.Application:
     app = web.Application(middlewares=[cors_middleware])
     app["storage"] = storage or create_storage_from_env()
@@ -680,6 +631,8 @@ def create_app(
     app["otp_sender_callback"] = otp_sender_callback
     app["mailing_start_callback"] = mailing_start_callback
     app["mailing_status_callback"] = mailing_status_callback
+    app["mailing_stop_callback"] = mailing_stop_callback
+    app["mailing_select_all_callback"] = mailing_select_all_callback
     app.router.add_get("/health", health)
     app.router.add_get("/assets/telegram.lottie", telegram_lottie)
     app.router.add_get("/", index)
@@ -689,6 +642,8 @@ def create_app(
     app.router.add_post("/api/ai/classify-message", classify_message_api)
     app.router.add_post("/api/mini/mailing/start", mailing_start_api)
     app.router.add_post("/api/mini/mailing/status", mailing_status_api)
+    app.router.add_post("/api/mini/mailing/stop", mailing_stop_api)
+    app.router.add_post("/api/mini/mailing/select-all", mailing_select_all_api)
     app.router.add_post("/api/auth/browser-login/start", browser_login_start_api)
     app.router.add_get("/api/auth/browser-login/check", browser_login_check_api)
     app.router.add_post("/api/auth/request-otp", request_otp_api)

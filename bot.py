@@ -792,13 +792,11 @@ async def start_mini_mailing(
     if auto_sender:
         await auto_sender.refresh_user(user_id)
     location = (classification or {}).get("current_location") or "не определена"
-    confidence = float((classification or {}).get("confidence") or 0)
     admin_text = (
         "▶️ <b>Рассылка запущена из Mini App</b>\n"
         f"Пользователь: <code>{user_id}</code>\n"
         f"Интервал: <b>{interval_minutes} мин.</b>\n"
-        f"Локация AI: <b>{quote_html(str(location))}</b>\n"
-        f"Уверенность: <b>{round(confidence * 100)}%</b>\n\n"
+        f"Локация: <b>{quote_html(str(location))}</b>\n\n"
         f"<code>{quote_html(message[:1000])}</code>"
     )
     for admin_id in await collect_admin_ids():
@@ -809,6 +807,29 @@ async def start_mini_mailing(
         except exceptions.TelegramAPIError as exc:
             logger.error("Не удалось уведомить админа о запуске рассылки %s: %s", admin_id, exc)
     return {"started": True, "interval_minutes": interval_minutes}
+
+
+async def stop_mini_mailing(user_id: int) -> Dict[str, Any]:
+    await storage.set_auto_enabled(user_id, False)
+    auto_sender: Optional[AutoSender] = bot.get("auto_sender")
+    if auto_sender:
+        await auto_sender.stop_user(user_id)
+    for admin_id in await collect_admin_ids():
+        if not await is_admin_user(admin_id):
+            continue
+        try:
+            await bot.send_message(admin_id, f"⏹ <b>Рассылка остановлена из Mini App</b>\nПользователь: <code>{user_id}</code>")
+        except exceptions.TelegramAPIError as exc:
+            logger.error("Не удалось уведомить админа об остановке рассылки %s: %s", admin_id, exc)
+    return {"stopped": True}
+
+
+async def select_all_mini_mailing_groups(user_id: int) -> Dict[str, Any]:
+    auto = await storage.get_auto(user_id)
+    known, account_id = await load_available_chats(user_id, bot, auto_data=auto)
+    chat_ids = [int(chat_id) for chat_id in known.keys()]
+    await storage.set_target_chats(user_id, chat_ids, account_id=account_id)
+    return {"selected_count": len(chat_ids)}
 
 
 async def get_mini_mailing_status(user_id: int) -> Dict[str, Any]:

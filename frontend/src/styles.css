@@ -717,6 +717,12 @@ p {
   border-radius: 3.2rem 2rem 3.4rem 2.2rem;
 }
 
+.mailing-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
 .mailing-status {
   display: grid;
   gap: 6px;

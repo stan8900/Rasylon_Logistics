@@ -48,7 +48,7 @@ type DriverActivity = {
   destination: string;
   vehicle_type: string;
   availability: string;
-  confidence: number;
+  intent?: string;
   message: string;
   source: string;
   minutes_ago: number;
@@ -74,7 +74,6 @@ type MessageClassification = {
   destination: string | null;
   vehicle_type: string | null;
   availability: string | null;
-  confidence: number;
   source: string;
   should_map: boolean;
 };
@@ -97,102 +96,8 @@ let authToken: string | null = window.localStorage.getItem("rasylon_auth_token")
 let selectedLocationId = "tashkent";
 let radiusKm = 120;
 let query = "";
-let locations: LocationSignal[] = [
-  {
-    id: "tashkent",
-    name: "Ташкент",
-    country: "Узбекистан",
-    lat: 41.31,
-    lon: 69.28,
-    drivers: 18,
-    messages: 42,
-    updated_at: "2 мин назад",
-    trend: [8, 11, 13, 16, 18],
-    subscribed: true,
-    favorite: true,
-  },
-  {
-    id: "samarkand",
-    name: "Самарканд",
-    country: "Узбекистан",
-    lat: 39.65,
-    lon: 66.96,
-    drivers: 9,
-    messages: 21,
-    updated_at: "8 мин назад",
-    trend: [4, 6, 5, 8, 9],
-    subscribed: false,
-    favorite: true,
-  },
-  {
-    id: "almaty",
-    name: "Алматы",
-    country: "Казахстан",
-    lat: 43.24,
-    lon: 76.9,
-    drivers: 14,
-    messages: 37,
-    updated_at: "5 мин назад",
-    trend: [10, 9, 12, 13, 14],
-    subscribed: true,
-    favorite: false,
-  },
-  {
-    id: "bishkek",
-    name: "Бишкек",
-    country: "Кыргызстан",
-    lat: 42.87,
-    lon: 74.59,
-    drivers: 7,
-    messages: 16,
-    updated_at: "14 мин назад",
-    trend: [2, 3, 5, 7, 7],
-    subscribed: false,
-    favorite: false,
-  },
-];
-
-let activities: DriverActivity[] = [
-  {
-    id: "a1",
-    driver: "Rasul",
-    username: "@rasul_tir",
-    location: "Ташкент",
-    destination: "Алматы",
-    vehicle_type: "фура тент",
-    availability: "сегодня",
-    confidence: 0.94,
-    source: "gruz_uz",
-    minutes_ago: 2,
-    message: "Стою Ташкент, фура тент, ищу груз на Алматы, готов сегодня",
-  },
-  {
-    id: "a2",
-    driver: "Aziz",
-    username: "@aziz_ref",
-    location: "Самарканд",
-    destination: "Ташкент",
-    vehicle_type: "рефрижератор",
-    availability: "утром",
-    confidence: 0.89,
-    source: "gruzoperevozky_sng",
-    minutes_ago: 8,
-    message: "Самарканд, реф, свободен, ищу загрузку на завтра",
-  },
-  {
-    id: "a3",
-    driver: "Bek",
-    username: "@bek_log",
-    location: "Алматы",
-    destination: "Ташкент",
-    vehicle_type: "изотерм",
-    availability: "сейчас",
-    confidence: 0.91,
-    source: "logistics_kazakhstan",
-    minutes_ago: 11,
-    message: "Алматы стою, изотерм, направление Ташкент/Шымкент",
-  },
-];
+let locations: LocationSignal[] = [];
+let activities: DriverActivity[] = [];
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("App root not found");
@@ -245,14 +150,14 @@ app.innerHTML = `
           <strong id="totalMessages">0</strong>
         </div>
         <div>
-          <span>Уверенность AI</span>
-          <strong>91%</strong>
+          <span>Локаций на карте</span>
+          <strong id="totalLocations">0</strong>
         </div>
       </section>
 
       <section class="section-head compact">
         <h1>Активность водителей</h1>
-        <button data-screen-target="locations">Локации</button>
+        <button data-screen-target="inbox">Сообщения</button>
       </section>
       <div class="activity-list" id="activityList"></div>
     </section>
@@ -272,10 +177,10 @@ app.innerHTML = `
     <section class="screen" data-screen="messages">
       <section class="editorial-strip">
         <span>Auto mailing</span>
-        <strong>Сообщение сортируется AI по локации и запускается в выбранные Telegram-группы.</strong>
+        <strong>Рассылка запускается от выбранного номера по выбранным Telegram-группам.</strong>
       </section>
       <div class="section-head">
-        <h1>Запуск рассылки</h1>
+        <h1>Рассылка</h1>
         <button id="refreshMailingStatus">Статус</button>
       </div>
       <div class="mailing-status" id="mailingStatusBox">Проверяем доступ к рассылке...</div>
@@ -283,14 +188,25 @@ app.innerHTML = `
         <label>Текст рассылки<textarea id="mailingMessage" placeholder="Например: Ташкент, тент, ищу груз на Алматы, готов сегодня"></textarea></label>
         <div class="otp-grid">
           <label>Интервал, минут<input id="mailingInterval" inputmode="numeric" value="10" /></label>
-          <button class="secondary-button" type="button" id="classifyMessageInline">Проверить AI</button>
+          <label>Номер<input id="mailingSender" readonly value="Проверяем..." /></label>
         </div>
-        <div class="ai-result" id="aiResult">AI ожидает текст сообщения.</div>
+        <div class="mailing-actions">
+          <button class="secondary-button" type="button" id="selectAllGroups">Выбрать все группы</button>
+          <button class="ghost-button" type="button" id="stopMailing">Остановить рассылку</button>
+        </div>
         <button class="primary-button wide" type="submit">Запустить авторассылку</button>
         <div class="status" id="mailingStatus"></div>
       </form>
-      <div class="parser-flow">
-        <span>Telegram</span><span>Parser</span><span>AI</span><span>Geo</span><span>Dashboard</span>
+    </section>
+
+    <section class="screen" data-screen="inbox">
+      <section class="editorial-strip">
+        <span>Messages</span>
+        <strong>Сообщения от людей, которые ищут водителей, отсортированы по локации и направлению.</strong>
+      </section>
+      <div class="section-head">
+        <h1>Сообщения</h1>
+        <button id="refreshMessages">Обновить</button>
       </div>
       <div class="activity-list" id="messageList"></div>
     </section>
@@ -401,8 +317,8 @@ app.innerHTML = `
 
   <nav class="bottom-nav">
     <button class="nav-item active" data-screen-target="dashboard">Карта</button>
-    <button class="nav-item" data-screen-target="locations">Локации</button>
-    <button class="nav-item" data-screen-target="messages">Сообщения</button>
+    <button class="nav-item" data-screen-target="messages">Рассылка</button>
+    <button class="nav-item" data-screen-target="inbox">Сообщения</button>
     <button class="nav-item" data-screen-target="profile">Профиль</button>
   </nav>
 `;
@@ -427,7 +343,7 @@ function setStatus(element: HTMLElement, message: string, ok = false): void {
 }
 
 function setScreen(screen: string): void {
-  const protectedScreens = ["dashboard", "locations", "messages", "profile"];
+  const protectedScreens = ["dashboard", "locations", "messages", "inbox", "profile"];
   if (!isAuthenticated && protectedScreens.includes(screen)) {
     screen = "login";
   }
@@ -454,7 +370,19 @@ async function postJson<T>(path: string, payload: Record<string, unknown>): Prom
 }
 
 function selectedLocation(): LocationSignal {
-  return locations.find((location) => location.id === selectedLocationId) || locations[0];
+  return locations.find((location) => location.id === selectedLocationId) || locations[0] || {
+    id: "tashkent",
+    name: "Ташкент",
+    country: "Узбекистан",
+    lat: 41.31,
+    lon: 69.28,
+    drivers: 0,
+    messages: 0,
+    updated_at: "",
+    trend: [],
+    subscribed: false,
+    favorite: false,
+  };
 }
 
 function filteredLocations(): LocationSignal[] {
@@ -480,9 +408,9 @@ function renderMap(): void {
       const position = locationPosition(location);
       const active = location.id === selectedLocationId ? "active" : "";
       return `
-        <button class="map-pin ${active}" data-location-id="${location.id}" style="left:${position.left}%;top:${position.top}%">
+        <button class="map-pin ${active}" data-location-id="${escapeHtml(location.id)}" style="left:${position.left}%;top:${position.top}%">
           <strong>${location.drivers}</strong>
-          <span>${location.name}</span>
+          <span>${escapeHtml(location.name)}</span>
         </button>
       `;
     })
@@ -490,49 +418,52 @@ function renderMap(): void {
   byId("radiusLabel").textContent = `${radiusKm} км`;
   byId("totalDrivers").textContent = String(locations.reduce((sum, location) => sum + location.drivers, 0));
   byId("totalMessages").textContent = String(locations.reduce((sum, location) => sum + location.messages, 0));
+  byId("totalLocations").textContent = String(locations.length);
 }
 
 function renderActivities(): void {
   const current = selectedLocation().name;
-  const relevant = activities.filter((activity) => activity.location === current || activeScreen === "messages");
+  const relevant = activities.filter((activity) => activity.location === current);
   const html = relevant
     .map((activity) => `
       <article class="activity-card">
         <div class="activity-head">
           <div>
-            <strong>${activity.driver}</strong>
-            <span>${activity.username} · ${activity.minutes_ago} мин назад</span>
+            <strong>${escapeHtml(activity.driver)}</strong>
+            <span>${escapeHtml(activity.username)} · ${activity.minutes_ago} мин назад</span>
           </div>
-          <em>${Math.round(activity.confidence * 100)}%</em>
         </div>
-        <p>${activity.message}</p>
+        <p>${escapeHtml(activity.message)}</p>
         <div class="chips">
-          <span>${activity.location}</span>
-          <span>→ ${activity.destination}</span>
-          <span>${activity.vehicle_type}</span>
-          <span>${activity.availability}</span>
+          <span>${escapeHtml(activity.location)}</span>
+          <span>→ ${escapeHtml(activity.destination)}</span>
+          <span>${escapeHtml(activity.vehicle_type)}</span>
+          <span>${escapeHtml(activity.availability)}</span>
         </div>
-        <footer>Источник: Telegram-группа @${activity.source}</footer>
+        <footer>Источник: Telegram-группа @${escapeHtml(activity.source)}</footer>
       </article>
     `)
     .join("");
-  byId("activityList").innerHTML = html || `<div class="empty">В этой локации пока нет уверенных сигналов.</div>`;
-  byId("messageList").innerHTML = activities.map((activity) => `
+  byId("activityList").innerHTML = html || `<div class="empty">Пока нет реальных сигналов по этой локации.</div>`;
+  const cargoRequests = activities
+    .filter((activity) => (activity.intent || "").includes("searching_driver"))
+    .sort((left, right) => left.minutes_ago - right.minutes_ago);
+  byId("messageList").innerHTML = cargoRequests.map((activity) => `
     <article class="activity-card source">
-      <div class="activity-head"><strong>@${activity.source}</strong><em>${Math.round(activity.confidence * 100)}%</em></div>
-      <p>${activity.message}</p>
-      <div class="chips"><span>driver_searching_cargo</span><span>${activity.location}</span><span>${activity.vehicle_type}</span></div>
+      <div class="activity-head"><strong>@${escapeHtml(activity.source)}</strong><span>${activity.minutes_ago} мин назад</span></div>
+      <p>${escapeHtml(activity.message)}</p>
+      <div class="chips"><span>${escapeHtml(activity.location)}</span><span>→ ${escapeHtml(activity.destination)}</span><span>${escapeHtml(activity.vehicle_type)}</span></div>
     </article>
-  `).join("");
+  `).join("") || `<div class="empty">Пока нет реальных сообщений от людей, которые ищут водителей.</div>`;
 }
 
 function renderLocations(): void {
   byId<HTMLDivElement>("locationList").innerHTML = filteredLocations()
     .map((location) => `
-      <article class="location-card ${location.id === selectedLocationId ? "active" : ""}" data-location-id="${location.id}">
+      <article class="location-card ${location.id === selectedLocationId ? "active" : ""}" data-location-id="${escapeHtml(location.id)}">
         <div>
-          <strong>${location.name}</strong>
-          <span>${location.country} · обновлено ${location.updated_at}</span>
+          <strong>${escapeHtml(location.name)}</strong>
+          <span>${escapeHtml(location.country)} · обновлено ${escapeHtml(location.updated_at)}</span>
         </div>
         <div class="location-stats">
           <span>${location.drivers} водителей</span>
@@ -540,8 +471,8 @@ function renderLocations(): void {
         </div>
         <div class="spark">${location.trend.map((value) => `<i style="height:${10 + value * 2}px"></i>`).join("")}</div>
         <div class="card-actions">
-          <button data-toggle-sub="${location.id}">${location.subscribed ? "Отписаться" : "Подписаться"}</button>
-          <button data-toggle-fav="${location.id}">${location.favorite ? "В избранном" : "В избранное"}</button>
+          <button data-toggle-sub="${escapeHtml(location.id)}">${location.subscribed ? "Отписаться" : "Подписаться"}</button>
+          <button data-toggle-fav="${escapeHtml(location.id)}">${location.favorite ? "В избранном" : "В избранное"}</button>
         </div>
       </article>
     `)
@@ -628,16 +559,6 @@ async function submitPayment(event: SubmitEvent): Promise<void> {
   }
 }
 
-function renderClassification(classification: MessageClassification): void {
-  byId("aiResult").innerHTML = `
-    <strong>${classification.intent}</strong>
-    <span>Локация: ${classification.current_location || "не определена"}</span>
-    <span>Направление: ${classification.destination || "не определено"}</span>
-    <span>Транспорт: ${classification.vehicle_type || "не указан"}</span>
-    <span>Confidence: ${Math.round(classification.confidence * 100)}%</span>
-  `;
-}
-
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -666,6 +587,7 @@ async function loadMailingStatus(): Promise<void> {
       sender_account?: { title?: string; phone?: string; username?: string } | null;
     }>("/api/mini/mailing/status", basePayload());
     const account = data.sender_account?.title || data.sender_account?.phone || data.sender_account?.username || "бот";
+    byId<HTMLInputElement>("mailingSender").value = account;
     box.innerHTML = `
       <strong>${data.can_start ? "Готово к запуску" : "Нужно настроить"}</strong>
       <span>Групп выбрано: ${data.target_count}</span>
@@ -674,6 +596,7 @@ async function loadMailingStatus(): Promise<void> {
       ${data.reasons.length ? `<em>${escapeHtml(data.reasons.map(reasonText).join(" "))}</em>` : ""}
     `;
   } catch {
+    byId<HTMLInputElement>("mailingSender").value = "Требуется вход";
     box.textContent = "Войдите через Telegram, чтобы увидеть статус рассылки.";
   }
 }
@@ -681,11 +604,9 @@ async function loadMailingStatus(): Promise<void> {
 async function classifyMailingMessage(): Promise<MessageClassification | null> {
   const message = byId<HTMLTextAreaElement>("mailingMessage").value.trim();
   if (!message) {
-    byId("aiResult").textContent = "Введите текст сообщения для AI-сортировки.";
     return null;
   }
   const data = await postJson<{ classification: MessageClassification }>("/api/ai/classify-message", { message });
-  renderClassification(data.classification);
   return data.classification;
 }
 
@@ -713,6 +634,32 @@ async function startMailing(event: SubmitEvent): Promise<void> {
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     setStatus(status, code === "auth_required" ? "Сначала войдите через Telegram." : "Не удалось запустить рассылку.");
+  }
+}
+
+async function selectAllGroups(): Promise<void> {
+  const status = byId<HTMLDivElement>("mailingStatus");
+  setStatus(status, "");
+  try {
+    const result = await postJson<{ selected_count?: number }>("/api/mini/mailing/select-all", basePayload());
+    setStatus(status, `Выбрано групп: ${result.selected_count || 0}.`, true);
+    await loadMailingStatus();
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    setStatus(status, code === "auth_required" ? "Сначала войдите через Telegram." : "Не удалось выбрать группы.");
+  }
+}
+
+async function stopMailing(): Promise<void> {
+  const status = byId<HTMLDivElement>("mailingStatus");
+  setStatus(status, "");
+  try {
+    await postJson("/api/mini/mailing/stop", basePayload());
+    setStatus(status, "Авторассылка остановлена.", true);
+    await loadMailingStatus();
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    setStatus(status, code === "auth_required" ? "Сначала войдите через Telegram." : "Не удалось остановить рассылку.");
   }
 }
 
@@ -859,8 +806,10 @@ byId<HTMLButtonElement>("clearLocations").addEventListener("click", () => {
   renderLocations();
 });
 byId<HTMLButtonElement>("refreshSignals").addEventListener("click", () => void loadSignals());
-byId<HTMLButtonElement>("classifyMessageInline").addEventListener("click", () => void classifyMailingMessage());
+byId<HTMLButtonElement>("refreshMessages").addEventListener("click", () => void loadSignals());
 byId<HTMLButtonElement>("refreshMailingStatus").addEventListener("click", () => void loadMailingStatus());
+byId<HTMLButtonElement>("selectAllGroups").addEventListener("click", () => void selectAllGroups());
+byId<HTMLButtonElement>("stopMailing").addEventListener("click", () => void stopMailing());
 byId<HTMLFormElement>("mailingForm").addEventListener("submit", (event) => void startMailing(event as SubmitEvent));
 byId<HTMLButtonElement>("openBotLogin").addEventListener("click", () => void startBrowserLogin());
 byId<HTMLButtonElement>("sendOtp").addEventListener("click", () => void sendOtp());
