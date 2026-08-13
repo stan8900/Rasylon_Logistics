@@ -45,6 +45,11 @@ AUTH_SESSION_TTL_SECONDS = int(os.getenv("AUTH_SESSION_TTL_SECONDS", "604800"))
 AUTH_SESSION_STORE: Dict[str, Dict[str, Any]] = {}
 AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "rasylon_auth_token")
 AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "true").lower() not in {"0", "false", "no"}
+ADMIN_USER_IDS = {
+    int(admin_id.strip())
+    for admin_id in os.getenv("ADMIN_IDS", "").split(",")
+    if admin_id.strip().isdigit()
+}
 KNOWN_LOCATION_ALIASES = {
     "таш": "Ташкент",
     "tash": "Ташкент",
@@ -384,13 +389,20 @@ def build_locations_payload(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"locations": output_locations, "activities": activities}
 
 
-async def resolve_signal_chat_scope(storage: Any, user_id: int) -> Dict[str, Any]:
+async def resolve_signal_chat_scope(
+    storage: Any,
+    user_id: int,
+    shared_chat_ids: Optional[Any] = None,
+) -> Dict[str, Any]:
     auto = await storage.get_auto(user_id)
     target_chat_ids = auto.get("target_chat_ids") or []
     if target_chat_ids:
         return {"scope": "selected_groups", "chat_ids": [int(chat_id) for chat_id in target_chat_ids]}
     account_id = auto.get("sender_account_id")
     if account_id is None:
+        shared_ids = [int(chat_id) for chat_id in (shared_chat_ids or [])]
+        if shared_ids and user_id in ADMIN_USER_IDS:
+            return {"scope": "admin_shared_sender_groups", "chat_ids": shared_ids}
         return {"scope": "no_selected_groups", "chat_ids": []}
     account_chats = await storage.list_known_chats(account_id=account_id, owner_id=user_id)
     return {
@@ -471,7 +483,11 @@ async def signals_api(request: web.Request) -> web.Response:
         limit = int(data.get("limit") or 100)
     except (TypeError, ValueError):
         limit = 100
-    scope = await resolve_signal_chat_scope(request.app["storage"], user_id)
+    scope = await resolve_signal_chat_scope(
+        request.app["storage"],
+        user_id,
+        request.app.get("shared_signal_chat_ids"),
+    )
     messages = await request.app["storage"].list_logistics_messages(limit=limit, chat_ids=scope["chat_ids"])
     return web.json_response({"ok": True, "scope": scope["scope"], **build_locations_payload(messages)})
 
@@ -848,6 +864,7 @@ def create_app(
     app["mailing_status_callback"] = mailing_status_callback
     app["mailing_stop_callback"] = mailing_stop_callback
     app["mailing_select_all_callback"] = mailing_select_all_callback
+    app["shared_signal_chat_ids"] = set()
     app.router.add_get("/health", health)
     app.router.add_get("/assets/telegram.lottie", telegram_lottie)
     app.router.add_get("/", index)

@@ -47,6 +47,7 @@ from app.states import (
     SharedProxyStates,
 )
 from app.user_sender import UserSender, build_telethon_proxy
+from app.user_dialogs import UserLogisticsMessageListener
 from public_web import classify_message_locally, confirm_browser_login
 from telethon import TelegramClient
 from telethon.errors import (
@@ -78,6 +79,7 @@ BOT_SLEEP_MESSAGE_TEMPLATE = os.getenv(
 )
 DAILY_REPORT_TEST_USER_ID = int(os.getenv("DAILY_REPORT_TEST_USER_ID", "1535189323"))
 REPORT_LOOP_INTERVAL_SECONDS = int(os.getenv("REPORT_LOOP_INTERVAL_SECONDS", "60"))
+LOGISTICS_BACKFILL_LIMIT_PER_CHAT = int(os.getenv("LOGISTICS_BACKFILL_LIMIT_PER_CHAT", "10"))
 
 
 def get_sleep_timezone() -> ZoneInfo:
@@ -362,7 +364,7 @@ async def instantiate_user_sender(bot_obj: Bot) -> Optional[UserSender]:
     if not api_id or not api_hash or not session:
         return None
     proxy = bot_obj.get("shared_proxy")
-    sender = UserSender(api_id, api_hash, session, proxy=proxy)
+    sender = UserSender(api_id, api_hash, session, proxy=proxy, receive_updates=True)
     await sender.start()
     return sender
 
@@ -3126,7 +3128,14 @@ async def on_startup(dispatcher: Dispatcher) -> None:
     )
     dispatcher.bot["auto_sender"] = auto_sender
     if user_sender_instance:
-        await auto_sender.get_personal_chats(refresh=True)
+        personal_chats = await auto_sender.get_personal_chats(refresh=True)
+        web_app = dispatcher.bot.get("web_app")
+        if web_app is not None:
+            web_app["shared_signal_chat_ids"] = set(personal_chats.keys())
+        listener = UserLogisticsMessageListener(user_sender_instance, storage, classify_message_locally)
+        dispatcher.bot["logistics_message_listener"] = listener
+        await listener.start()
+        await listener.backfill_recent(personal_chats.keys(), limit_per_chat=LOGISTICS_BACKFILL_LIMIT_PER_CHAT)
     dispatcher.bot["bot_id"] = me.id
     await storage.ensure_constraints(
         user_id=None,
@@ -3152,6 +3161,9 @@ async def on_shutdown(dispatcher: Dispatcher) -> None:
     auto_sender: Optional[AutoSender] = dispatcher.bot.get("auto_sender")
     if auto_sender:
         await auto_sender.stop_all()
+    logistics_message_listener: Optional[UserLogisticsMessageListener] = dispatcher.bot.get("logistics_message_listener")
+    if logistics_message_listener:
+        await logistics_message_listener.stop()
     user_sender_instance: Optional[UserSender] = dispatcher.bot.get("user_sender")
     if user_sender_instance:
         await user_sender_instance.stop()

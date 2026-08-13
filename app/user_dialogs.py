@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
 from telethon import events
 
@@ -9,6 +9,7 @@ from .user_sender import UserSender
 
 
 PaymentCallback = Callable[[int, str], Awaitable[None]]
+ClassifierCallback = Callable[[str], Dict[str, Any]]
 
 
 class UserDialogResponder:
@@ -158,3 +159,111 @@ class UserDialogResponder:
                 await self._payment_created_callback(sender_id, request_id)
             except Exception:
                 self._logger.exception("Failed to notify admins about payment request from user session.")
+
+
+class UserLogisticsMessageListener:
+    """Stores logistics messages visible to the shared Telethon account."""
+
+    def __init__(
+        self,
+        user_sender: UserSender,
+        storage: Storage,
+        classifier: ClassifierCallback,
+    ) -> None:
+        self._user_sender = user_sender
+        self._storage = storage
+        self._classifier = classifier
+        self._event_filter = events.NewMessage(incoming=True)
+        self._handler_registered = False
+        self._logger = logging.getLogger(__name__)
+
+    async def start(self) -> None:
+        if self._handler_registered:
+            return
+        await self._user_sender.start()
+        self._user_sender.client.add_event_handler(self._handle_new_message, self._event_filter)
+        self._handler_registered = True
+        self._logger.info("UserLogisticsMessageListener started for shared Telegram account.")
+
+    async def stop(self) -> None:
+        if not self._handler_registered:
+            return
+        self._user_sender.client.remove_event_handler(self._handle_new_message, self._event_filter)
+        self._handler_registered = False
+
+    async def _handle_new_message(self, event: events.NewMessage.Event) -> None:
+        if event.out or event.is_private:
+            return
+        chat = await event.get_chat()
+        await self._store_message(
+            chat_id=int(getattr(chat, "id", 0) or event.chat_id or 0),
+            chat_title=getattr(chat, "title", None) or getattr(chat, "username", None),
+            chat_username=getattr(chat, "username", None),
+            message=event.message,
+        )
+
+    async def backfill_recent(self, chats: Iterable[int], *, limit_per_chat: int = 10) -> None:
+        await self._user_sender.start()
+        client = self._user_sender.client
+        for chat_id in chats:
+            try:
+                async for message in client.iter_messages(int(chat_id), limit=max(1, min(50, limit_per_chat))):
+                    await self._store_message(
+                        chat_id=int(chat_id),
+                        chat_title=f"Чат {chat_id}",
+                        chat_username=None,
+                        message=message,
+                    )
+            except Exception:
+                self._logger.exception("Failed to backfill logistics messages for chat_id=%s.", chat_id)
+
+    async def _store_message(
+        self,
+        *,
+        chat_id: int,
+        chat_title: Optional[str],
+        chat_username: Optional[str],
+        message: Any,
+    ) -> None:
+        if getattr(message, "out", False) or not chat_id:
+            return
+        sender_id = getattr(message, "sender_id", None)
+        text = (getattr(message, "raw_text", None) or getattr(message, "message", None) or "").strip()
+        if not text:
+            return
+        classification = self._classifier(text)
+        if classification.get("intent") not in {"cargo_searching_driver", "driver_searching_cargo"}:
+            return
+        sender = await message.get_sender() if hasattr(message, "get_sender") else None
+        author_id = int(sender_id) if sender_id else None
+        author_username = getattr(sender, "username", None) if sender else None
+        author_name = "Telegram user"
+        if sender:
+            author_name = (
+                " ".join(filter(None, [getattr(sender, "first_name", None), getattr(sender, "last_name", None)]))
+                or author_username
+                or str(author_id)
+            )
+        try:
+            inserted = await self._storage.record_logistics_message(
+                chat_id=chat_id,
+                message_id=int(message.id),
+                chat_title=str(chat_title or f"Чат {chat_id}"),
+                chat_username=chat_username,
+                author_id=author_id,
+                author_name=author_name,
+                author_username=author_username,
+                text=text[:4000],
+                classification=classification,
+                created_at=message.date.isoformat() if getattr(message, "date", None) else None,
+            )
+        except Exception:
+            self._logger.exception("Failed to store logistics message from shared Telegram account.")
+            return
+        if inserted:
+            self._logger.info(
+                "Stored logistics message from shared account chat_id=%s intent=%s location=%s",
+                chat_id,
+                classification.get("intent"),
+                classification.get("current_location"),
+            )

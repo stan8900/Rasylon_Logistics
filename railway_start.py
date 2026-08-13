@@ -67,6 +67,7 @@ async def run_web(stop_event: asyncio.Event) -> web.AppRunner:
         mailing_stop_callback=bot_module.stop_mini_mailing,
         mailing_select_all_callback=bot_module.select_all_mini_mailing_groups,
     )
+    bot_module.bot["web_app"] = app
     runner = web.AppRunner(app)
     await runner.setup()
     host = os.getenv("APP_HOST", "0.0.0.0")

@@ -52,6 +52,7 @@ class UserSender:
         session_string: str,
         *,
         proxy: Optional[Dict[str, Union[str, int]]] = None,
+        receive_updates: bool = False,
     ) -> None:
         self._proxy = build_telethon_proxy(proxy)
         self._client = TelegramClient(
@@ -62,7 +63,7 @@ class UserSender:
             connection_retries=2,
             request_retries=2,
             timeout=10,
-            receive_updates=False,
+            receive_updates=receive_updates,
         )
         self._start_lock = asyncio.Lock()
         self._started = False

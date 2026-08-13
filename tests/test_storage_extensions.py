@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.storage import Storage
-from public_web import resolve_signal_chat_scope
+from public_web import ADMIN_USER_IDS, resolve_signal_chat_scope
 
 
 class StorageExtensionsTest(unittest.TestCase):
@@ -232,6 +232,28 @@ class StorageExtensionsTest(unittest.TestCase):
 
             self.assertEqual(scope["scope"], "no_selected_groups")
             self.assertEqual(scope["chat_ids"], [])
+
+        asyncio.run(runner())
+
+    def test_signal_scope_does_not_expose_shared_chats_to_non_admin(self) -> None:
+        async def runner() -> None:
+            scope = await resolve_signal_chat_scope(self.storage, 42, shared_chat_ids=[-1001, -1002])
+
+            self.assertEqual(scope["scope"], "no_selected_groups")
+            self.assertEqual(scope["chat_ids"], [])
+
+        asyncio.run(runner())
+
+    def test_signal_scope_allows_shared_chats_for_admin(self) -> None:
+        async def runner() -> None:
+            ADMIN_USER_IDS.add(42)
+            try:
+                scope = await resolve_signal_chat_scope(self.storage, 42, shared_chat_ids=[-1001, -1002])
+            finally:
+                ADMIN_USER_IDS.discard(42)
+
+            self.assertEqual(scope["scope"], "admin_shared_sender_groups")
+            self.assertEqual(scope["chat_ids"], [-1001, -1002])
 
         asyncio.run(runner())
 
