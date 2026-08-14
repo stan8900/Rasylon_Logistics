@@ -204,7 +204,7 @@ app.innerHTML = `
     <section class="screen" data-screen="inbox">
       <section class="editorial-strip">
         <span>Messages</span>
-        <strong>Сообщения от людей, которые ищут водителей, отсортированы по локации и направлению.</strong>
+        <strong>Сообщения от водителей, которые ищут груз, отсортированы по локации и направлению.</strong>
       </section>
       <div class="section-head">
         <h1>Сообщения</h1>
@@ -464,20 +464,20 @@ function renderActivities(): void {
     `)
     .join("");
   byId("activityList").innerHTML = html || `<div class="empty">Пока нет реальных сигналов по этой локации.</div>`;
-  const cargoRequests = activities
-    .filter((activity) => (activity.intent || "").includes("searching_driver"))
+  const driverCargoRequests = activities
+    .filter((activity) => activity.intent === "driver_searching_cargo")
     .sort((left, right) => left.minutes_ago - right.minutes_ago);
   if (signalsError) {
     byId("messageList").innerHTML = `<div class="empty">${escapeHtml(signalsError)}</div>`;
     return;
   }
-  byId("messageList").innerHTML = cargoRequests.map((activity) => `
+  byId("messageList").innerHTML = driverCargoRequests.map((activity) => `
     <article class="activity-card source">
       <div class="activity-head"><strong>@${escapeHtml(activity.source)}</strong><span>${activity.minutes_ago} мин назад</span></div>
       <p>${escapeHtml(activity.message)}</p>
       <div class="chips"><span>${escapeHtml(activity.location)}</span><span>→ ${escapeHtml(activity.destination)}</span><span>${escapeHtml(activity.vehicle_type)}</span></div>
     </article>
-  `).join("") || `<div class="empty">Пока нет реальных сообщений от людей, которые ищут водителей.</div>`;
+  `).join("") || `<div class="empty">Пока нет реальных сообщений от водителей, которые ищут груз.</div>`;
 }
 
 function renderLocations(): void {
