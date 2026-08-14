@@ -28,6 +28,7 @@ PAYMENT_CARD_TARGET = os.getenv("PAYMENT_CARD_TARGET", "9860 1701 1433 3116")
 BOT_USERNAME = (os.getenv("BOT_USERNAME") or os.getenv("TELEGRAM_BOT_USERNAME") or "").lstrip("@")
 SUPPORT_AGENT_USERNAME = os.getenv("SUPPORT_AGENT_USERNAME", "@rasylon_support")
 ADMIN_REDIRECT_URL = os.getenv("ADMIN_REDIRECT_URL", "https://rasylon-support-production.up.railway.app/")
+YANDEX_MAPS_API_KEY = os.getenv("YANDEX_MAPS_API_KEY") or os.getenv("VITE_YANDEX_MAPS_API_KEY")
 PaymentCreatedCallback = Callable[[int, str], Awaitable[None]]
 OrderCreatedCallback = Callable[[Dict[str, Any]], Awaitable[None]]
 OtpSenderCallback = Callable[[str, str, Optional[int]], Awaitable[None]]
@@ -459,6 +460,9 @@ async def config_api(request: web.Request) -> web.Response:
                 "username": BOT_USERNAME,
                 "url": f"https://t.me/{BOT_USERNAME}" if BOT_USERNAME else None,
                 "support": SUPPORT_AGENT_USERNAME,
+            },
+            "maps": {
+                "yandex_api_key": YANDEX_MAPS_API_KEY,
             },
         }
     )

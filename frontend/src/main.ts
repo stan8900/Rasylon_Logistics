@@ -99,6 +99,7 @@ let query = "";
 let locations: LocationSignal[] = [];
 let activities: DriverActivity[] = [];
 let signalsError: string | null = null;
+let yandexMapActive = false;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("App root not found");
@@ -405,7 +406,15 @@ function locationPosition(location: LocationSignal): { left: number; top: number
 
 function renderMap(): void {
   const pins = byId<HTMLDivElement>("mapPins");
-  pins.innerHTML = locations
+  pins.innerHTML = yandexMapActive ? "" : renderFallbackMapPins();
+  byId("radiusLabel").textContent = `${radiusKm} км`;
+  byId("totalDrivers").textContent = String(locations.reduce((sum, location) => sum + location.drivers, 0));
+  byId("totalMessages").textContent = String(locations.reduce((sum, location) => sum + location.messages, 0));
+  byId("totalLocations").textContent = String(locations.length);
+}
+
+function renderFallbackMapPins(): string {
+  return locations
     .map((location) => {
       const position = locationPosition(location);
       const active = location.id === selectedLocationId ? "active" : "";
@@ -417,10 +426,18 @@ function renderMap(): void {
       `;
     })
     .join("");
-  byId("radiusLabel").textContent = `${radiusKm} км`;
-  byId("totalDrivers").textContent = String(locations.reduce((sum, location) => sum + location.drivers, 0));
-  byId("totalMessages").textContent = String(locations.reduce((sum, location) => sum + location.messages, 0));
-  byId("totalLocations").textContent = String(locations.length);
+}
+
+function markerElement(location: LocationSignal): HTMLElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `geo-map-pin ${location.id === selectedLocationId ? "active" : ""}`;
+  button.dataset.locationId = location.id;
+  button.innerHTML = `
+    <strong>${location.drivers}</strong>
+    <span>${escapeHtml(location.name)}</span>
+  `;
+  return button;
 }
 
 function renderActivities(): void {
@@ -511,24 +528,38 @@ function loadScript(src: string): Promise<void> {
 async function initRealMap(): Promise<void> {
   const container = byId<HTMLDivElement>("realMap");
   const selected = selectedLocation();
-  const apiKey = import.meta.env.VITE_YANDEX_MAPS_API_KEY || "";
+  const apiKey = config?.maps?.yandex_api_key || import.meta.env.VITE_YANDEX_MAPS_API_KEY || "";
   if (apiKey) {
     try {
       await loadScript(`https://api-maps.yandex.ru/v3/?apikey=${encodeURIComponent(apiKey)}&lang=ru_RU`);
       await window.ymaps3.ready;
-      const { YMap, YMapDefaultSchemeLayer } = window.ymaps3;
+      const { YMap, YMapDefaultSchemeLayer, YMapDefaultFeaturesLayer, YMapMarker } = window.ymaps3;
       container.innerHTML = "";
+      yandexMapActive = true;
+      byId<HTMLDivElement>("mapPins").innerHTML = "";
       const map = new YMap(container, {
         location: { center: [selected.lon, selected.lat], zoom: 6 },
       });
       map.addChild(new YMapDefaultSchemeLayer());
+      map.addChild(new YMapDefaultFeaturesLayer());
+      locations.forEach((location) => {
+        map.addChild(
+          new YMapMarker(
+            { coordinates: [location.lon, location.lat] },
+            markerElement(location),
+          ),
+        );
+      });
       return;
     } catch {
+      yandexMapActive = false;
       container.innerHTML = "";
     }
   }
+  yandexMapActive = false;
   const bbox = "65.5,38.2,78.8,44.6";
   container.innerHTML = `<iframe title="OpenStreetMap" src="https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${selected.lat},${selected.lon}" loading="lazy"></iframe>`;
+  byId<HTMLDivElement>("mapPins").innerHTML = renderFallbackMapPins();
 }
 
 async function loadSignals(): Promise<void> {
