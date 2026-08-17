@@ -68,6 +68,12 @@ type MiniConfig = {
   };
 };
 
+type BrowserLoginStartResponse = {
+  token: string;
+  bot_url: string | null;
+  expires_in?: number;
+};
+
 type MessageClassification = {
   intent: string;
   current_location: string | null;
@@ -224,6 +230,7 @@ app.innerHTML = `
         <form class="panel login-panel" id="otpForm">
           <h2>Подтверждение номера</h2>
           <button class="primary-button wide" type="button" id="openBotLogin">Войти через Telegram-бота</button>
+          <a class="telegram-login-link" id="manualBotLogin" href="#" target="_blank" rel="noopener noreferrer">Открыть Telegram для входа</a>
           <div class="divider"><span>или OTP по номеру</span></div>
           <div class="otp-grid">
             <label>Телефон<input id="authPhone" inputmode="tel" autocomplete="tel" placeholder="+998..." /></label>
@@ -342,6 +349,26 @@ function basePayload(): Record<string, unknown> {
 function setStatus(element: HTMLElement, message: string, ok = false): void {
   element.classList.toggle("ok", ok);
   element.textContent = message;
+}
+
+function setTelegramLoginLink(botUrl: string | null): void {
+  const link = byId<HTMLAnchorElement>("manualBotLogin");
+  if (!botUrl) {
+    link.classList.remove("visible");
+    link.href = "#";
+    return;
+  }
+  link.href = botUrl;
+  link.classList.add("visible");
+}
+
+function openTelegramLogin(botUrl: string | null): void {
+  if (!botUrl) return;
+  if (tg?.openTelegramLink) {
+    tg.openTelegramLink(botUrl);
+    return;
+  }
+  window.location.href = botUrl;
 }
 
 function setScreen(screen: string): void {
@@ -740,15 +767,15 @@ async function sendOtp(): Promise<void> {
 async function startBrowserLogin(): Promise<void> {
   const status = byId<HTMLDivElement>("otpStatus");
   setStatus(status, "");
+  setTelegramLoginLink(null);
   try {
-    const response = await postJson<{ token: string; bot_url: string | null }>("/api/auth/browser-login/start", {});
+    const response = await postJson<BrowserLoginStartResponse>("/api/auth/browser-login/start", {});
     browserLoginToken = response.token;
     if (browserLoginPoll !== null) window.clearInterval(browserLoginPoll);
     browserLoginPoll = window.setInterval(() => void checkBrowserLogin(), 1800);
-    setStatus(status, "Откройте Telegram-бота и нажмите Start. После подтверждения dashboard откроется автоматически.", true);
-    if (response.bot_url) {
-      window.open(response.bot_url, "_blank", "noopener,noreferrer");
-    }
+    setTelegramLoginLink(response.bot_url);
+    setStatus(status, "Откройте Telegram по кнопке выше и нажмите Start. После подтверждения dashboard откроется автоматически.", true);
+    openTelegramLogin(response.bot_url);
   } catch {
     setStatus(status, "Не удалось создать ссылку для входа. Попробуйте позже.");
   }

@@ -851,6 +851,23 @@ p {
   border-radius: 3.5rem 2rem 2.6rem 2rem;
 }
 
+.telegram-login-link {
+  display: none;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 2px solid rgba(188, 126, 79, .55);
+  color: var(--secondary);
+  font-size: 14px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.telegram-login-link.visible {
+  display: flex;
+}
+
 .divider {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
