@@ -84,7 +84,16 @@ type MessageClassification = {
   should_map: boolean;
 };
 
+type TourStep = {
+  selector: string;
+  screen?: string;
+  title: string;
+  text: string;
+  action: "click" | "focus" | "ack";
+};
+
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "https://rasylonlogistics-production.up.railway.app").replace(/\/$/, "");
+const ONBOARDING_TOUR_KEY = "rasylon_onboarding_tour_v1";
 const tg = window.Telegram?.WebApp;
 
 if (tg) {
@@ -106,6 +115,65 @@ let locations: LocationSignal[] = [];
 let activities: DriverActivity[] = [];
 let signalsError: string | null = null;
 let yandexMapActive = false;
+let tourActive = false;
+let tourStepIndex = 0;
+let tourResizeHandler: (() => void) | null = null;
+
+const tourSteps: TourStep[] = [
+  {
+    selector: '.nav-item[data-screen-target="messages"]',
+    title: "Рассылка",
+    text: "Нажмите сюда, чтобы открыть запуск авторассылки по Telegram-группам.",
+    action: "click",
+  },
+  {
+    selector: "#mailingMessage",
+    screen: "messages",
+    title: "Текст объявления",
+    text: "Нажмите в поле и введите сообщение, которое бот будет отправлять в выбранные группы.",
+    action: "focus",
+  },
+  {
+    selector: "#selectAllGroups",
+    screen: "messages",
+    title: "Группы",
+    text: "Нажмите, чтобы выбрать все доступные Telegram-группы для текущего номера.",
+    action: "click",
+  },
+  {
+    selector: "#mailingSender",
+    screen: "messages",
+    title: "Номер отправителя",
+    text: "Здесь видно, с какого Telegram-аккаунта будет идти рассылка.",
+    action: "ack",
+  },
+  {
+    selector: '.nav-item[data-screen-target="inbox"]',
+    title: "Сообщения",
+    text: "Нажмите сюда, чтобы перейти к найденным сообщениям водителей, которые ищут груз.",
+    action: "click",
+  },
+  {
+    selector: "#refreshMessages",
+    screen: "inbox",
+    title: "Обновление",
+    text: "Эта кнопка обновляет реальные сообщения из Telegram-групп.",
+    action: "click",
+  },
+  {
+    selector: '.nav-item[data-screen-target="profile"]',
+    title: "Профиль",
+    text: "Нажмите сюда, чтобы открыть профиль, оплату и настройки аккаунта.",
+    action: "click",
+  },
+  {
+    selector: ".profile-card",
+    screen: "profile",
+    title: "Готово",
+    text: "Тур завершен. Теперь можно запускать рассылку и проверять сообщения водителей.",
+    action: "ack",
+  },
+];
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("App root not found");
@@ -330,6 +398,16 @@ app.innerHTML = `
     <button class="nav-item" data-screen-target="inbox">Сообщения</button>
     <button class="nav-item" data-screen-target="profile">Профиль</button>
   </nav>
+
+  <div class="onboarding-tour" id="onboardingTour" hidden>
+    <div class="tour-spotlight" id="tourSpotlight"></div>
+    <section class="tour-card" id="tourCard" role="dialog" aria-live="polite">
+      <span id="tourCounter"></span>
+      <strong id="tourTitle"></strong>
+      <p id="tourText"></p>
+      <button class="primary-button" type="button" id="tourAck">Понятно</button>
+    </section>
+  </div>
 `;
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -385,6 +463,115 @@ function setScreen(screen: string): void {
     button.classList.toggle("active", button.dataset.screenTarget === screen);
   });
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function currentTourStep(): TourStep | null {
+  return tourSteps[tourStepIndex] || null;
+}
+
+function clearTourTarget(): void {
+  document.querySelectorAll<HTMLElement>(".tour-target-active").forEach((element) => {
+    element.classList.remove("tour-target-active");
+  });
+}
+
+function targetForStep(step: TourStep): HTMLElement | null {
+  return document.querySelector<HTMLElement>(step.selector);
+}
+
+function positionTour(step: TourStep, target: HTMLElement): void {
+  const rect = target.getBoundingClientRect();
+  const margin = 8;
+  const spotlight = byId<HTMLDivElement>("tourSpotlight");
+  const card = byId<HTMLElement>("tourCard");
+  const width = Math.max(44, rect.width + margin * 2);
+  const height = Math.max(44, rect.height + margin * 2);
+  const left = Math.max(8, rect.left - margin);
+  const top = Math.max(8, rect.top - margin);
+
+  spotlight.style.width = `${width}px`;
+  spotlight.style.height = `${height}px`;
+  spotlight.style.transform = `translate(${left}px, ${top}px)`;
+
+  const cardWidth = Math.min(340, window.innerWidth - 24);
+  const spaceBelow = window.innerHeight - rect.bottom;
+  const cardTop = spaceBelow > 190 ? rect.bottom + 18 : Math.max(14, rect.top - 190);
+  const cardLeft = Math.min(
+    window.innerWidth - cardWidth - 12,
+    Math.max(12, rect.left + rect.width / 2 - cardWidth / 2),
+  );
+  card.style.width = `${cardWidth}px`;
+  card.style.transform = `translate(${cardLeft}px, ${cardTop}px)`;
+
+  byId("tourCounter").textContent = `${tourStepIndex + 1} / ${tourSteps.length}`;
+  byId("tourTitle").textContent = step.title;
+  byId("tourText").textContent = step.text;
+  byId<HTMLButtonElement>("tourAck").hidden = step.action !== "ack";
+}
+
+function renderTourStep(): void {
+  const step = currentTourStep();
+  const overlay = byId<HTMLDivElement>("onboardingTour");
+  if (!tourActive || !step) {
+    overlay.hidden = true;
+    clearTourTarget();
+    return;
+  }
+  if (step.screen && activeScreen !== step.screen) {
+    setScreen(step.screen);
+  }
+  window.requestAnimationFrame(() => {
+    const latestStep = currentTourStep();
+    if (!latestStep) return;
+    const target = targetForStep(latestStep);
+    if (!target) {
+      window.setTimeout(renderTourStep, 120);
+      return;
+    }
+    clearTourTarget();
+    target.classList.add("tour-target-active");
+    target.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+    window.setTimeout(() => positionTour(latestStep, target), 220);
+    overlay.hidden = false;
+  });
+}
+
+function finishTour(): void {
+  tourActive = false;
+  window.localStorage.setItem(ONBOARDING_TOUR_KEY, "done");
+  if (tourResizeHandler) {
+    window.removeEventListener("resize", tourResizeHandler);
+    window.removeEventListener("scroll", tourResizeHandler, true);
+    tourResizeHandler = null;
+  }
+  byId<HTMLDivElement>("onboardingTour").hidden = true;
+  clearTourTarget();
+}
+
+function advanceTour(): void {
+  if (!tourActive) return;
+  tourStepIndex += 1;
+  if (tourStepIndex >= tourSteps.length) {
+    finishTour();
+    return;
+  }
+  renderTourStep();
+}
+
+function startOnboardingTourIfNeeded(): void {
+  if (!isAuthenticated || window.localStorage.getItem(ONBOARDING_TOUR_KEY) === "done" || tourActive) {
+    return;
+  }
+  tourActive = true;
+  tourStepIndex = 0;
+  tourResizeHandler = () => {
+    const step = currentTourStep();
+    const target = step ? targetForStep(step) : null;
+    if (step && target) positionTour(step, target);
+  };
+  window.addEventListener("resize", tourResizeHandler);
+  window.addEventListener("scroll", tourResizeHandler, true);
+  renderTourStep();
 }
 
 async function postJson<T>(path: string, payload: Record<string, unknown>): Promise<T> {
@@ -815,6 +1002,7 @@ async function checkBrowserLogin(): Promise<void> {
       setScreen("dashboard");
       await loadSignals();
       await loadMailingStatus();
+      startOnboardingTourIfNeeded();
       return;
     }
     if (data.status === "expired" && browserLoginPoll !== null) {
@@ -841,6 +1029,8 @@ async function verifyOtp(event: SubmitEvent): Promise<void> {
     setStatus(status, "Вход выполнен.", true);
     setScreen("dashboard");
     await loadSignals();
+    await loadMailingStatus();
+    startOnboardingTourIfNeeded();
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     setStatus(status, code === "otp_expired" ? "OTP истек. Запросите новый код." : code === "too_many_attempts" ? "Слишком много попыток. Попробуйте позже." : "Неверный OTP.");
@@ -853,6 +1043,40 @@ function renderAll(): void {
   renderLocations();
   void initRealMap();
 }
+
+document.addEventListener("click", (event) => {
+  if (!tourActive) return;
+  const step = currentTourStep();
+  if (!step) return;
+  const target = targetForStep(step);
+  const clicked = event.target as Node;
+  const card = byId<HTMLElement>("tourCard");
+  if (card.contains(clicked)) {
+    if (step.action !== "ack") {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    return;
+  }
+  if (target?.contains(clicked)) {
+    if (step.action === "click") {
+      window.setTimeout(advanceTour, 120);
+    }
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+}, true);
+
+document.addEventListener("focusin", (event) => {
+  if (!tourActive) return;
+  const step = currentTourStep();
+  if (!step || step.action !== "focus") return;
+  const target = targetForStep(step);
+  if (target?.contains(event.target as Node)) {
+    window.setTimeout(advanceTour, 120);
+  }
+});
 
 document.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
@@ -908,6 +1132,7 @@ byId<HTMLButtonElement>("selectAllGroups").addEventListener("click", () => void 
 byId<HTMLButtonElement>("stopMailing").addEventListener("click", () => void stopMailing());
 byId<HTMLFormElement>("mailingForm").addEventListener("submit", (event) => void startMailing(event as SubmitEvent));
 byId<HTMLButtonElement>("openBotLogin").addEventListener("click", () => void startBrowserLogin());
+byId<HTMLButtonElement>("tourAck").addEventListener("click", advanceTour);
 byId<HTMLButtonElement>("sendOtp").addEventListener("click", () => void sendOtp());
 byId<HTMLFormElement>("otpForm").addEventListener("submit", (event) => void verifyOtp(event as SubmitEvent));
 byId<HTMLFormElement>("paymentForm").addEventListener("submit", (event) => void submitPayment(event as SubmitEvent));
@@ -948,3 +1173,4 @@ void loadConfig();
 void loadSignals();
 void loadMailingStatus();
 setScreen(activeScreen);
+window.setTimeout(startOnboardingTourIfNeeded, 700);

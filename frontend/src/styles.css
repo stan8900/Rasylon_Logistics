@@ -1121,6 +1121,73 @@ body.is-authenticated .bottom-nav {
   color: var(--primary-foreground);
 }
 
+.onboarding-tour[hidden] {
+  display: none;
+}
+
+.onboarding-tour {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  pointer-events: none;
+}
+
+.tour-spotlight {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 301;
+  border: 3px solid rgba(255, 254, 250, .96);
+  border-radius: 24px;
+  box-shadow: 0 0 0 9999px rgba(21, 23, 20, .72), 0 18px 44px -16px rgba(0, 0, 0, .65);
+  transition: transform 240ms, width 240ms, height 240ms, border-radius 240ms;
+}
+
+.tour-card {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 302;
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(222, 216, 207, .82);
+  border-radius: 22px;
+  background: rgba(255, 254, 250, .98);
+  color: var(--foreground);
+  box-shadow: 0 22px 60px -22px rgba(0, 0, 0, .42);
+  pointer-events: auto;
+  transition: transform 240ms;
+}
+
+.tour-card span {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.tour-card strong {
+  color: var(--primary);
+  font-family: "Fraunces", Georgia, serif;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.tour-card p {
+  color: var(--accent-foreground);
+  font-size: 15px;
+  line-height: 1.42;
+}
+
+.tour-card button[hidden] {
+  display: none;
+}
+
+.tour-target-active {
+  position: relative;
+  z-index: 310 !important;
+}
+
 @media (max-width: 420px) {
   .hero-copy {
     grid-template-columns: 1fr;
