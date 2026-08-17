@@ -718,7 +718,14 @@ async function startMailing(event: SubmitEvent): Promise<void> {
     await loadMailingStatus();
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
-    setStatus(status, code === "auth_required" ? "Сначала войдите через Telegram." : "Не удалось запустить рассылку.");
+    setStatus(
+      status,
+      code === "auth_required"
+        ? "Сначала войдите через Telegram."
+        : code === "message_required"
+          ? "Введите текст рассылки."
+          : "Не удалось запустить рассылку.",
+    );
   }
 }
 

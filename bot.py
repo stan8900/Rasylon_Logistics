@@ -836,7 +836,13 @@ async def select_all_mini_mailing_groups(user_id: int) -> Dict[str, Any]:
 
 async def get_mini_mailing_status(user_id: int) -> Dict[str, Any]:
     auto = await storage.get_auto(user_id)
-    targets = auto.get("target_chat_ids") or []
+    selected_targets = [int(chat_id) for chat_id in auto.get("target_chat_ids") or []]
+    known, resolved_account_id = await load_available_chats(user_id, bot, auto_data=auto)
+    available_ids = {int(chat_id) for chat_id in known.keys()}
+    if selected_targets:
+        targets = [chat_id for chat_id in selected_targets if chat_id in available_ids]
+    else:
+        targets = list(available_ids)
     user_payment = await storage.has_recent_payment_for_user(user_id, within_days=PAYMENT_VALID_DAYS)
     global_payment = await storage.has_recent_payment(within_days=PAYMENT_VALID_DAYS)
     reasons = []
@@ -847,7 +853,7 @@ async def get_mini_mailing_status(user_id: int) -> Dict[str, Any]:
     if not global_payment:
         reasons.append("system_payment_required")
     selected_account = None
-    sender_account_id = auto.get("sender_account_id")
+    sender_account_id = auto.get("sender_account_id") if auto.get("sender_account_id") is not None else resolved_account_id
     if sender_account_id is not None:
         selected_account = await storage.get_user_account(int(sender_account_id), owner_id=user_id)
     return {
