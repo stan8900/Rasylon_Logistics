@@ -183,8 +183,11 @@ app.innerHTML = `
     <header class="topbar">
       <button class="icon-button" data-screen-target="card" aria-label="Визитка">ID</button>
       <div class="brand">
-        Rasylon Logistics
-        <span>live-карта водителей из Telegram</span>
+        <img src="/logo.jpeg" alt="Rasylon Logistics" />
+        <div>
+          Rasylon Logistics
+          <span>live-карта водителей из Telegram</span>
+        </div>
       </div>
       <button class="icon-button" data-action="support" aria-label="Поддержка">?</button>
     </header>
@@ -290,7 +293,7 @@ app.innerHTML = `
     <section class="screen" data-screen="login">
       <div class="login-shell">
         <section class="visit-card compact">
-          <div class="avatar large">RL</div>
+          <img class="avatar large logo-avatar" src="/logo.jpeg" alt="Rasylon Logistics" />
           <h1>Вход по Telegram</h1>
           <p>Введите номер, который привязан к Telegram. Код придет от нашего бота.</p>
         </section>
@@ -318,7 +321,7 @@ app.innerHTML = `
         <strong>Все настройки, оплата и подписка находятся здесь.</strong>
       </section>
       <div class="profile-card">
-        <div class="avatar" id="avatar">RL</div>
+        <img class="avatar logo-avatar" id="avatar" src="/logo.jpeg" alt="Rasylon Logistics" />
         <div>
           <h1 id="profileName">Rasylon Logistics</h1>
           <p id="profileMeta">Telegram не привязан</p>
@@ -359,7 +362,7 @@ app.innerHTML = `
 
     <section class="screen" data-screen="card">
       <div class="visit-card">
-        <div class="avatar large">RL</div>
+        <img class="avatar large logo-avatar" src="/logo.jpeg" alt="Rasylon Logistics" />
         <div class="visit-copy">
           <span class="eyebrow">Telegram-бот для логистики и авторассылок</span>
           <h1>Одно сообщение — десятки Telegram-групп автоматически.</h1>

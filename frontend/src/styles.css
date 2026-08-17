@@ -131,11 +131,24 @@ body.is-authenticated .topbar {
 
 .brand {
   min-width: 0;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: left;
   font-family: "Fraunces", Georgia, serif;
-  font-size: clamp(20px, 5vw, 32px);
+  font-size: clamp(18px, 4.6vw, 30px);
   font-weight: 800;
   line-height: .98;
+}
+
+.brand img {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 999px;
+  object-fit: cover;
+  box-shadow: 0 10px 24px -14px rgba(var(--primary-rgb), .75);
 }
 
 .brand span {
@@ -916,6 +929,11 @@ p {
   height: 104px;
   margin: 0 auto;
   font-size: 32px;
+}
+
+.logo-avatar {
+  border: 3px solid rgba(255, 255, 255, .92);
+  object-fit: cover;
 }
 
 .otp-grid,
