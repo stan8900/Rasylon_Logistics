@@ -46,8 +46,6 @@ async def send_otp_to_telegram(phone: str, otp: str, telegram_user_id: int | Non
     user_id = user_id_from_otp_phone_map(phone)
     if user_id is None:
         user_id = await bot_module.storage.find_account_owner_by_phone(phone)
-    if user_id is None and telegram_user_id is not None:
-        user_id = telegram_user_id
     if user_id is None:
         raise LookupError("telegram_not_linked")
     await bot_module.bot.send_message(
