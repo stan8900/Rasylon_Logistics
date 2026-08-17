@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 
 from app.auto_sender import AutoSender
-from app.user_sender import InvalidUserSessionError, UserSender
+from app.user_sender import AUTHORIZATION_ERRORS, InvalidUserSessionError, UserSender
 
 
 class FakeBot(dict):
@@ -139,6 +139,9 @@ class InvalidSessionTest(unittest.TestCase):
             self.assertEqual(storage.ensure_constraints_calls, [{"user_id": None, "require_targets": True}])
 
         asyncio.run(runner())
+
+    def test_auth_key_duplicated_is_treated_as_invalid_session(self) -> None:
+        self.assertIn("AuthKeyDuplicatedError", {error.__name__ for error in AUTHORIZATION_ERRORS})
 
 
 if __name__ == "__main__":

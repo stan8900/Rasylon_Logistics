@@ -5,14 +5,14 @@ from typing import Dict, List, Optional, Tuple, Union
 import socks
 from telethon import TelegramClient
 from telethon.errors import RPCError
-from telethon.errors.rpcerrorlist import AuthKeyUnregisteredError, SessionRevokedError
+from telethon.errors.rpcerrorlist import AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError
 from telethon.sessions import StringSession
 from telethon.tl.types import Channel, Chat
 
 
 ChatId = Union[int, str]
 ProxyTuple = Tuple[int, str, int, bool, Optional[str], Optional[str]]
-AUTHORIZATION_ERRORS = (AuthKeyUnregisteredError, SessionRevokedError)
+AUTHORIZATION_ERRORS = (AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError)
 
 
 class InvalidUserSessionError(RuntimeError):
