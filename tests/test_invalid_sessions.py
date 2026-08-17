@@ -23,9 +23,13 @@ class FakeAudienceParser:
 class FakeStorage:
     def __init__(self) -> None:
         self.ensure_constraints_calls = []
+        self.known_chats = {}
 
     async def ensure_constraints(self, **kwargs) -> None:
         self.ensure_constraints_calls.append(kwargs)
+
+    async def list_known_chats(self, **kwargs):
+        return self.known_chats
 
 
 class RevokedSender:
@@ -142,6 +146,24 @@ class InvalidSessionTest(unittest.TestCase):
 
     def test_auth_key_duplicated_is_treated_as_invalid_session(self) -> None:
         self.assertIn("AuthKeyDuplicatedError", {error.__name__ for error in AUTHORIZATION_ERRORS})
+
+    def test_auto_sender_uses_chat_titles_for_error_labels(self) -> None:
+        async def runner() -> None:
+            storage = FakeStorage()
+            storage.known_chats = {
+                "1043172114": {"chat_id": 1043172114, "title": "Грузоперевозки UZ"},
+            }
+            auto_sender = AutoSender(FakeBot(), storage, payment_valid_days=30)
+
+            labels = await auto_sender._target_labels(
+                {"user_id": 1, "sender_account_id": None},
+                [1043172114, 1055138795],
+            )
+
+            self.assertEqual(labels[1043172114], "Грузоперевозки UZ")
+            self.assertNotIn(1055138795, labels)
+
+        asyncio.run(runner())
 
 
 if __name__ == "__main__":

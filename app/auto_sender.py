@@ -154,6 +154,7 @@ class AutoSender:
                 message = auto.get("message")
                 interval = int(auto.get("interval_minutes") or 0)
                 targets = await self._resolve_targets(auto)
+                target_labels = await self._target_labels(auto, targets)
                 if not message or not targets or interval <= 0:
                     await self._storage.set_auto_enabled(user_id, False)
                     break
@@ -172,6 +173,7 @@ class AutoSender:
                 errors: List[str] = []
                 should_stop = False
                 for index, chat_id in enumerate(targets):
+                    chat_label = target_labels.get(int(chat_id), f"Чат {chat_id}")
                     try:
                         if index > 0:
                             try:
@@ -204,19 +206,19 @@ class AutoSender:
                                 )
                                 break
                             if reason == "chat_rate_limit":
-                                errors.append(f"Чат {chat_id}: лимит 1 сообщение в 10 минут.")
+                                errors.append(f"{chat_label}: лимит 1 сообщение в 10 минут.")
                                 continue
                         await self._deliver_message(user_id, chat_id, message, account_id)
                         success += 1
                     except (BotKicked, ChatNotFound, Unauthorized) as exc:
-                        errors.append(f"Недоступен чат {chat_id}: {exc}")
+                        errors.append(f"Недоступен чат {chat_label}: {exc}")
                     except InvalidUserSessionError as exc:
                         errors.append(f"Личный аккаунт Telegram недоступен: {exc}")
                         await self._storage.set_auto_enabled(user_id, False)
                         should_stop = True
                         break
                     except Exception as exc:  # pragma: no cover - network errors
-                        errors.append(f"Ошибка доставки в чат {chat_id}: {exc}")
+                        errors.append(f"Ошибка доставки в чат {chat_label}: {exc}")
                 await self._storage.update_stats(user_id, sent=success, errors=errors)
                 if errors and self._error_notifier:
                     await self._error_notifier(user_id, errors)
@@ -313,6 +315,34 @@ class AutoSender:
         if self._bot.get("personal_session"):
             return []
         return list(auto.get("target_chat_ids") or [])
+
+    async def _target_labels(self, auto: dict, targets: List[int]) -> Dict[int, str]:
+        target_ids = {int(chat_id) for chat_id in targets}
+        if not target_ids:
+            return {}
+        account_id = auto.get("sender_account_id")
+        if account_id is not None:
+            known = await self._storage.list_known_chats(account_id=account_id, owner_id=auto["user_id"])
+        elif self._user_sender:
+            known = await self.get_personal_chats(refresh=not self._personal_chats)
+            return {
+                int(chat_id): self._clean_chat_title(title) or f"Чат {chat_id}"
+                for chat_id, title in known.items()
+                if int(chat_id) in target_ids
+            }
+        else:
+            known = await self._storage.list_known_chats()
+        labels: Dict[int, str] = {}
+        for raw_chat_id, info in known.items():
+            chat_id = int(raw_chat_id)
+            if chat_id not in target_ids:
+                continue
+            labels[chat_id] = self._clean_chat_title(str(info.get("title") or "")) or f"Чат {chat_id}"
+        return labels
+
+    @staticmethod
+    def _clean_chat_title(title: str) -> str:
+        return " ".join(str(title or "").split())[:120]
 
     async def _disable_shared_user_sender(self) -> None:
         sender = self._user_sender
