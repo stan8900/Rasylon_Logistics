@@ -83,7 +83,15 @@ async def cors_middleware(request: web.Request, handler: Callable[[web.Request],
         response = web.Response(status=204)
     else:
         response = await handler(request)
-    allowed_origin = os.getenv("CORS_ALLOW_ORIGIN", "*")
+    configured_origins = [
+        origin.strip()
+        for origin in os.getenv("CORS_ALLOW_ORIGIN", "*").split(",")
+        if origin.strip()
+    ]
+    request_origin = request.headers.get("Origin", "")
+    allowed_origin = "*"
+    if "*" not in configured_origins:
+        allowed_origin = request_origin if request_origin in configured_origins else (configured_origins[0] if configured_origins else "")
     response.headers["Access-Control-Allow-Origin"] = allowed_origin
     response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"

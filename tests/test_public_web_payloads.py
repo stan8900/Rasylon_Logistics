@@ -8,6 +8,7 @@ from public_web import (
     auth_user_from_token,
     build_locations_payload,
     classify_message_locally,
+    cors_middleware,
     create_auth_session,
     public_locations_payload,
     resolve_authenticated_user,
@@ -160,3 +161,26 @@ class PublicWebPayloadTest(unittest.TestCase):
         self.assertEqual(sum(location["drivers"] for location in payload["locations"]), 6)
         self.assertTrue(all("confidence" not in activity for activity in payload["activities"]))
         self.assertEqual(payload["locations"][0]["messages"], 4)
+
+
+class CorsMiddlewareTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cors_allows_custom_domain_from_comma_separated_origins(self) -> None:
+        async def handler(_request: SimpleNamespace) -> SimpleNamespace:
+            return SimpleNamespace(headers={})
+
+        request = SimpleNamespace(method="POST", headers={"Origin": "https://www.rasylon.uz"})
+        with patch.dict(
+            "os.environ",
+            {
+                "CORS_ALLOW_ORIGIN": (
+                    "https://rasylonlogisticsfrontend-production.up.railway.app,"
+                    "https://rasylon.uz,"
+                    "https://www.rasylon.uz"
+                )
+            },
+            clear=False,
+        ):
+            response = await cors_middleware(request, handler)
+
+        self.assertEqual(response.headers["Access-Control-Allow-Origin"], "https://www.rasylon.uz")
+        self.assertEqual(response.headers["Access-Control-Allow-Credentials"], "true")
