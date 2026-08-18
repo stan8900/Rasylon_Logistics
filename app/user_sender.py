@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import time
 from typing import Dict, List, Optional, Tuple, Union
 
 import socks
@@ -53,6 +55,7 @@ class UserSender:
         *,
         proxy: Optional[Dict[str, Union[str, int]]] = None,
         receive_updates: bool = False,
+        min_send_interval_seconds: Optional[float] = None,
     ) -> None:
         self._proxy = build_telethon_proxy(proxy)
         self._client = TelegramClient(
@@ -66,8 +69,16 @@ class UserSender:
             receive_updates=receive_updates,
         )
         self._start_lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()
         self._started = False
         self._invalid = False
+        if min_send_interval_seconds is None:
+            try:
+                min_send_interval_seconds = float(os.getenv("TG_USER_SEND_MIN_INTERVAL_SECONDS", "60"))
+            except ValueError:
+                min_send_interval_seconds = 60.0
+        self._min_send_interval_seconds = max(0.0, min_send_interval_seconds)
+        self._last_send_monotonic = 0.0
         self._logger = logging.getLogger(__name__)
 
     async def start(self) -> None:
@@ -101,16 +112,19 @@ class UserSender:
             self._started = True
 
     async def send_message(self, chat_id: ChatId, message: str) -> None:
-        await self.start()
-        try:
-            await self._client.send_message(chat_id, message)
-        except AUTHORIZATION_ERRORS as exc:
-            await self._mark_invalid()
-            raise InvalidUserSessionError(
-                "Пользовательская сессия Telegram отозвана. Заново авторизуйте аккаунт."
-            ) from exc
-        except RPCError as exc:
-            raise RuntimeError(f"Не удалось отправить сообщение через пользовательский аккаунт: {exc}") from exc
+        async with self._send_lock:
+            await self.start()
+            await self._wait_for_send_slot()
+            try:
+                await self._client.send_message(chat_id, message)
+                self._last_send_monotonic = time.monotonic()
+            except AUTHORIZATION_ERRORS as exc:
+                await self._mark_invalid()
+                raise InvalidUserSessionError(
+                    "Пользовательская сессия Telegram отозвана. Заново авторизуйте аккаунт."
+                ) from exc
+            except RPCError as exc:
+                raise RuntimeError(f"Не удалось отправить сообщение через пользовательский аккаунт: {exc}") from exc
 
     async def describe_self(self) -> str:
         await self.start()
@@ -157,6 +171,14 @@ class UserSender:
         self._started = False
         if self._client.is_connected():
             await self._client.disconnect()
+
+    async def _wait_for_send_slot(self) -> None:
+        if self._min_send_interval_seconds <= 0 or self._last_send_monotonic <= 0:
+            return
+        elapsed = time.monotonic() - self._last_send_monotonic
+        remaining = self._min_send_interval_seconds - elapsed
+        if remaining > 0:
+            await asyncio.sleep(remaining)
 
     @property
     def client(self) -> TelegramClient:
